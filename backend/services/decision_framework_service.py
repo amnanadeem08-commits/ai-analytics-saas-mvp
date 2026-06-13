@@ -6,6 +6,7 @@ import pandas as pd
 
 from backend.processing.data_profiler import profile_dataframe
 from backend.services.kpi_service import compute_business_metrics
+from backend.services.metric_suitability_service import aggregate_label, aggregate_series, metric_suitability
 from backend.utils.response_utils import to_json_safe
 
 
@@ -26,7 +27,10 @@ def _primary_metric_summary(profile: dict[str, Any], metric: str | None) -> dict
 def _segment_performance(df: pd.DataFrame, metric: str | None, segment: str | None) -> dict[str, Any] | None:
     if not metric or not segment or metric not in df.columns or segment not in df.columns:
         return None
-    grouped = df.groupby(segment, dropna=False)[metric].sum().sort_values(ascending=False)
+    suitability = metric_suitability(metric, df[metric])
+    aggregation = suitability["recommended_aggregation"]
+    groupby = df.groupby(segment, dropna=False)[metric]
+    grouped = (groupby.sum() if aggregation == "sum" else groupby.mean()).sort_values(ascending=False)
     if grouped.empty:
         return None
 
@@ -36,9 +40,12 @@ def _segment_performance(df: pd.DataFrame, metric: str | None, segment: str | No
     return {
         "dimension": segment,
         "metric": metric,
+        "aggregation": aggregation,
+        "aggregation_label": aggregate_label(aggregation),
+        "metric_suitability": suitability,
         "top_segment": str(grouped.index[0]),
         "top_value": to_json_safe(round(top_value, 4)),
-        "top_share_pct": round(top_value / total * 100, 2) if total else None,
+        "top_share_pct": round(top_value / total * 100, 2) if aggregation == "sum" and total else None,
         "bottom_segment": str(grouped.index[-1]),
         "bottom_value": to_json_safe(round(bottom_value, 4)),
         "segment_count": int(len(grouped)),
@@ -104,7 +111,10 @@ def build_decision_framework(df: pd.DataFrame) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
 
     if primary_metric:
-        total = _format_metric_value(metric_summary.get("sum"))
+        suitability = business_metrics.get("metric_suitability") or metric_suitability(primary_metric, df[primary_metric])
+        aggregation = suitability["recommended_aggregation"]
+        aggregation_name = aggregate_label(aggregation)
+        preferred_value = _format_metric_value(round(aggregate_series(df[primary_metric], aggregation), 4))
         mean = _format_metric_value(metric_summary.get("mean"))
         movement = (
             f" {primary_metric} {delta['direction']} {delta['delta_pct']}% from "
@@ -113,13 +123,19 @@ def build_decision_framework(df: pd.DataFrame) -> list[dict[str, Any]]:
             else ""
         )
         why = (
-            f"The dataset total for {primary_metric} is {total}, with an average value of {mean} "
+            f"The dataset {aggregation_name} for {primary_metric} is {preferred_value}, with an average value of {mean} "
             f"across {row_count:,} records."
         )
         if segment_perf:
-            why += (
+            segment_sentence = (
                 f" {segment_perf['top_segment']} is the leading {segment_perf['dimension']} "
                 f"with {segment_perf['top_share_pct']}% of total {segment_perf['metric']}."
+                if segment_perf["aggregation"] == "sum"
+                else f" {segment_perf['top_segment']} has the highest {segment_perf['aggregation_label']} "
+                f"{segment_perf['metric']} across {segment_perf['dimension']}."
+            )
+            why += (
+                segment_sentence
             )
 
         blocks.append(
@@ -127,10 +143,10 @@ def build_decision_framework(df: pd.DataFrame) -> list[dict[str, Any]]:
                 "block_id": f"{primary_metric}_performance",
                 "metric": primary_metric,
                 "framework": "what_why_action",
-                "what_happened": f"{primary_metric} totals {total}.{movement}",
+                "what_happened": f"{primary_metric} {aggregation_name} is {preferred_value}.{movement}",
                 "why_it_happened": why,
                 "what_to_do": (
-                    f"Use {primary_metric} as the primary executive KPI and review the strongest "
+                    f"Use {aggregation_name} {primary_metric} as the executive metric and review the strongest "
                     "and weakest business segments before setting the next operating target."
                 ),
                 "expected_impact": _impact_text(delta.get("delta_pct") if delta else None),
@@ -139,7 +155,7 @@ def build_decision_framework(df: pd.DataFrame) -> list[dict[str, Any]]:
                 "severity": "opportunity" if delta and delta.get("delta_pct") and delta["delta_pct"] > 0 else "monitor",
                 "evidence": {
                     "row_count": row_count,
-                    "metric_summary": {"metric": primary_metric, **metric_summary},
+                    "metric_summary": {"metric": primary_metric, "metric_suitability": suitability, **metric_summary},
                     "period_delta": delta,
                     "segment_performance": segment_perf,
                 },
@@ -155,11 +171,11 @@ def build_decision_framework(df: pd.DataFrame) -> list[dict[str, Any]]:
                 "framework": "what_why_action",
                 "what_happened": (
                     f"{segment_perf['top_segment']} leads {segment_perf['dimension']} with "
-                    f"{segment_perf['top_value']} total {segment_perf['metric']}."
+                    f"{segment_perf['top_value']} {segment_perf['aggregation_label']} {segment_perf['metric']}."
                 ),
                 "why_it_happened": (
-                    f"{segment_perf['top_segment']} contributes {segment_perf['top_share_pct']}% of total "
-                    f"{segment_perf['metric']}, while {segment_perf['bottom_segment']} contributes "
+                    f"{segment_perf['top_segment']} has the highest {segment_perf['aggregation_label']} "
+                    f"{segment_perf['metric']}, while {segment_perf['bottom_segment']} is lowest at "
                     f"{segment_perf['bottom_value']}."
                 ),
                 "what_to_do": (

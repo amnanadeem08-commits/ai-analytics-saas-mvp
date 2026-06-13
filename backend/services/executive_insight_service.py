@@ -7,6 +7,7 @@ import pandas as pd
 from backend.processing.data_profiler import profile_dataframe
 from backend.services.decision_framework_service import build_decision_framework
 from backend.services.kpi_service import compute_business_metrics, compute_kpi_cards
+from backend.services.metric_suitability_service import aggregate_label, aggregate_series, metric_suitability
 from backend.utils.response_utils import to_json_safe
 
 
@@ -24,14 +25,17 @@ def _primary_metric_summary(profile: dict[str, Any], metric: str | None) -> dict
     return profile.get("numeric_summary", {}).get(metric, {})
 
 
+def _metric_label(metric: str) -> str:
+    return metric.replace("_", " ").replace("-", " ").strip().title()
+
+
 def _segment_performance(df: pd.DataFrame, metric: str | None, segment: str | None) -> dict[str, Any] | None:
     if not metric or not segment or metric not in df.columns or segment not in df.columns:
         return None
-    grouped = (
-        df.groupby(segment, dropna=False)[metric]
-        .sum()
-        .sort_values(ascending=False)
-    )
+    suitability = metric_suitability(metric, df[metric])
+    aggregation = suitability["recommended_aggregation"]
+    groupby = df.groupby(segment, dropna=False)[metric]
+    grouped = (groupby.sum() if aggregation == "sum" else groupby.mean()).sort_values(ascending=False)
     if grouped.empty:
         return None
     total = float(grouped.sum())
@@ -40,9 +44,12 @@ def _segment_performance(df: pd.DataFrame, metric: str | None, segment: str | No
     return {
         "dimension": segment,
         "metric": metric,
+        "aggregation": aggregation,
+        "aggregation_label": aggregate_label(aggregation),
+        "metric_suitability": suitability,
         "top_segment": str(grouped.index[0]),
         "top_value": to_json_safe(round(top_value, 4)),
-        "top_share_pct": round(top_value / total * 100, 2) if total else None,
+        "top_share_pct": round(top_value / total * 100, 2) if aggregation == "sum" and total else None,
         "bottom_segment": str(grouped.index[-1]),
         "bottom_value": to_json_safe(round(bottom_value, 4)),
         "segment_count": int(len(grouped)),
@@ -105,13 +112,20 @@ def build_executive_summary(df: pd.DataFrame) -> dict[str, Any]:
     ]
 
     if primary_metric:
+        metric_label = _metric_label(primary_metric)
         summary = profile["numeric_summary"].get(primary_metric, {})
-        evidence.append(f"Total {primary_metric}: {to_json_safe(summary.get('sum'))}")
-        evidence.append(f"Average {primary_metric}: {to_json_safe(summary.get('mean'))}")
+        suitability = business_metrics.get("metric_suitability") or metric_suitability(primary_metric, df[primary_metric])
+        aggregation = suitability["recommended_aggregation"]
+        preferred_value = aggregate_series(df[primary_metric], aggregation)
+        evidence.append(f"{aggregate_label(aggregation).title()} {metric_label}: {to_json_safe(round(preferred_value, 4))}")
+        evidence.append(f"Average {metric_label}: {to_json_safe(summary.get('mean'))}")
+        if aggregation != "sum":
+            evidence.append(f"Metric suitability: SUM is not recommended for {metric_label}; use {aggregate_label(aggregation)} and distribution.")
 
     if segment_leader:
+        leader_agg = segment_leader.get("aggregation", "sum")
         evidence.append(
-            f"Top {segment_leader['dimension']} by {segment_leader['metric']}: "
+            f"Top {segment_leader['dimension']} by {aggregate_label(leader_agg)} {segment_leader['metric']}: "
             f"{segment_leader['segment']} ({segment_leader['value']})"
         )
 
@@ -122,15 +136,23 @@ def build_executive_summary(df: pd.DataFrame) -> dict[str, Any]:
         )
 
     if primary_metric and segment_leader:
+        metric_label = _metric_label(primary_metric)
         top_share = segment_perf.get("top_share_pct") if segment_perf else None
+        aggregation = segment_perf.get("aggregation", segment_leader.get("aggregation", "sum")) if segment_perf else segment_leader.get("aggregation", "sum")
+        aggregation_label = aggregate_label(aggregation)
         insight = (
-            f"{segment_leader['segment']} leads {segment_leader['dimension']} performance "
-            f"on {primary_metric}."
+            f"{segment_leader['segment']} has the highest {aggregation_label} {metric_label} "
+            f"across {segment_leader['dimension']}."
         )
         reason = (
-            f"The grouped total for {segment_leader['segment']} is {segment_leader['value']}"
-            + (f", representing {top_share}% of total {primary_metric}" if top_share is not None else "")
-            + "."
+            f"The grouped {aggregation_label} for {segment_leader['segment']} is {segment_leader['value']}"
+            + (f", representing {top_share}% of total {metric_label}" if aggregation == "sum" and top_share is not None else "")
+            + ". "
+            + (
+                f"{metric_label} is better interpreted with {aggregation_label} or distribution analysis, not total."
+                if aggregation != "sum"
+                else "This metric is suitable for additive contribution analysis."
+            )
         )
         action = (
             f"Review what is driving {segment_leader['segment']} performance and compare it "
@@ -153,8 +175,12 @@ def build_executive_summary(df: pd.DataFrame) -> dict[str, Any]:
         key_findings.append(
             {
                 "title": f"{primary_metric} performance baseline",
-                "finding": f"Total {primary_metric} is {to_json_safe(metric_summary.get('sum'))} with average {to_json_safe(metric_summary.get('mean'))}.",
-                "evidence": {"metric": primary_metric, **metric_summary},
+                "finding": (
+                    f"{aggregate_label((business_metrics.get('metric_suitability') or {}).get('recommended_aggregation', 'sum')).title()} "
+                    f"{primary_metric} is {to_json_safe(round(aggregate_series(df[primary_metric], (business_metrics.get('metric_suitability') or {}).get('recommended_aggregation', 'sum')), 4))} "
+                    f"with average {to_json_safe(metric_summary.get('mean'))}."
+                ),
+                "evidence": {"metric": primary_metric, "metric_suitability": business_metrics.get("metric_suitability"), **metric_summary},
             }
         )
     if segment_perf:
@@ -162,8 +188,8 @@ def build_executive_summary(df: pd.DataFrame) -> dict[str, Any]:
             {
                 "title": f"{segment_perf['dimension']} concentration",
                 "finding": (
-                    f"{segment_perf['top_segment']} contributes {segment_perf['top_share_pct']}% "
-                    f"of total {segment_perf['metric']}."
+                    f"{segment_perf['top_segment']} has the highest {segment_perf['aggregation_label']} "
+                    f"{segment_perf['metric']}."
                 ),
                 "evidence": segment_perf,
             }
@@ -218,7 +244,7 @@ def build_executive_summary(df: pd.DataFrame) -> dict[str, Any]:
         opportunities.append(
             {
                 "opportunity": f"Close the gap in {segment_perf['bottom_segment']}",
-                "why": f"{segment_perf['bottom_segment']} trails with {segment_perf['bottom_value']} total {segment_perf['metric']}.",
+                "why": f"{segment_perf['bottom_segment']} trails with {segment_perf['bottom_value']} {segment_perf['aggregation_label']} {segment_perf['metric']}.",
                 "evidence": segment_perf,
             }
         )
@@ -236,7 +262,7 @@ def build_executive_summary(df: pd.DataFrame) -> dict[str, Any]:
         recommendations.append(
             {
                 "recommendation": f"Prioritize {segment_perf['top_segment']} playbook analysis",
-                "reason": f"It leads {segment_perf['dimension']} with {segment_perf['top_value']} total {segment_perf['metric']}.",
+                "reason": f"It leads {segment_perf['dimension']} with {segment_perf['top_value']} {segment_perf['aggregation_label']} {segment_perf['metric']}.",
                 "expected_impact": _impact_text(delta.get("delta_pct") if delta else None),
             }
         )
@@ -288,6 +314,10 @@ def build_executive_summary(df: pd.DataFrame) -> dict[str, Any]:
             "kpi_count": len(kpi_cards),
         },
         "confidence": confidence,
+        "data_confidence": confidence,
+        "business_confidence": (business_metrics.get("metric_suitability") or {}).get("business_confidence", confidence),
+        "business_relevance": (business_metrics.get("metric_suitability") or {}).get("business_relevance", "medium"),
+        "metric_suitability": business_metrics.get("metric_suitability"),
         "key_findings": key_findings,
         "risks": risks,
         "opportunities": opportunities,

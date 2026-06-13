@@ -6,6 +6,7 @@ import pandas as pd
 
 from backend.core.theme_manager import theme_manager
 from backend.processing.column_detector import detect_column_types
+from backend.services.metric_suitability_service import aggregate_label, aggregate_series, metric_suitability, select_primary_metric
 from backend.utils.response_utils import to_json_safe
 
 
@@ -103,7 +104,22 @@ def _series_delta(series: pd.Series) -> tuple[float | None, float | None, float 
     return current, previous, delta, "down", "negative"
 
 
-def _sparkline(series: pd.Series, buckets: int = 8) -> list[float]:
+def _series_delta_for_metric(series: pd.Series, aggregation: str) -> tuple[float | None, float | None, float | None, str, str]:
+    clean = pd.to_numeric(series, errors="coerce").dropna()
+    if len(clean) < 2:
+        return None, None, None, "neutral", "neutral"
+    midpoint = max(len(clean) // 2, 1)
+    previous = aggregate_series(clean.iloc[:midpoint], aggregation)
+    current = aggregate_series(clean.iloc[midpoint:], aggregation)
+    delta = None if previous == 0 else round((current - previous) / abs(previous) * 100, 2)
+    if delta is None or delta == 0:
+        return current, previous, delta, "neutral", "neutral"
+    if delta > 0:
+        return current, previous, delta, "up", "positive"
+    return current, previous, delta, "down", "negative"
+
+
+def _sparkline(series: pd.Series, buckets: int = 8, aggregation: str = "sum") -> list[float]:
     clean = pd.to_numeric(series, errors="coerce").dropna()
     if clean.empty:
         return []
@@ -112,29 +128,32 @@ def _sparkline(series: pd.Series, buckets: int = 8) -> list[float]:
 
     ranked = clean.reset_index(drop=True)
     groups = pd.cut(ranked.index, bins=buckets, labels=False)
-    values = ranked.groupby(groups).sum().round(4).tolist()
+    grouped = ranked.groupby(groups)
+    values = (grouped.sum() if aggregation == "sum" else grouped.mean()).round(4).tolist()
     return [to_json_safe(float(value)) for value in values]
 
 
-def _top_segment_context(df: pd.DataFrame, metric_column: str, categorical_columns: list[str]) -> dict[str, Any] | None:
+def _top_segment_context(
+    df: pd.DataFrame,
+    metric_column: str,
+    categorical_columns: list[str],
+    aggregation: str = "sum",
+) -> dict[str, Any] | None:
     if not categorical_columns:
         return None
     dimension = categorical_columns[0]
-    grouped = (
-        df.groupby(dimension, dropna=False)[metric_column]
-        .sum()
-        .sort_values(ascending=False)
-    )
+    groupby = df.groupby(dimension, dropna=False)[metric_column]
+    grouped = (groupby.sum() if aggregation == "sum" else groupby.mean()).sort_values(ascending=False)
     if grouped.empty:
         return None
-    total = float(grouped.sum())
     top_value = float(grouped.iloc[0])
-    share = round(top_value / total * 100, 2) if total else None
+    share = round(top_value / float(grouped.sum()) * 100, 2) if aggregation == "sum" and float(grouped.sum()) else None
     return {
         "dimension": dimension,
         "segment": str(grouped.index[0]),
         "value": to_json_safe(round(top_value, 4)),
         "share_pct": share,
+        "aggregation": aggregation,
     }
 
 
@@ -169,21 +188,30 @@ def compute_kpi_cards(df: pd.DataFrame) -> list[dict[str, Any]]:
         ),
     ]
 
-    financial_columns = [col for col in numeric_columns if _is_financial_column(col)]
-    metric_columns = financial_columns or numeric_columns[:3]
+    metric_candidates = [
+        column for column in numeric_columns if metric_suitability(column, df[column])["is_valid_metric"]
+    ]
+    financial_columns = [col for col in metric_candidates if _is_financial_column(col)]
+    metric_columns = financial_columns or metric_candidates[:3]
 
     for column in metric_columns[:4]:
         series = pd.to_numeric(df[column], errors="coerce").dropna()
         if series.empty:
             continue
         pretty = _pretty_name(column)
+        suitability = metric_suitability(column, series)
+        aggregation = suitability["recommended_aggregation"]
+        aggregate_name = aggregate_label(aggregation)
         total = round(float(series.sum()), 4)
         average = round(float(series.mean()), 4)
-        current, previous, delta, trend, status = _series_delta(series)
-        driver = _top_segment_context(df, column, categorical_columns)
+        primary_value = round(aggregate_series(series, aggregation), 4)
+        current, previous, delta, trend, status = _series_delta_for_metric(series, aggregation)
+        driver = _top_segment_context(df, column, categorical_columns, aggregation)
         reason = (
-            f"{driver['segment']} contributes {driver['share_pct']}% of {pretty} across {driver['dimension']}."
-            if driver and driver.get("share_pct") is not None
+            f"{driver['segment']} contributes {driver['share_pct']}% of total {pretty} across {driver['dimension']}."
+            if driver and aggregation == "sum" and driver.get("share_pct") is not None
+            else f"{driver['segment']} has the highest average {pretty} across {driver['dimension']}."
+            if driver and aggregation == "average"
             else f"{pretty} is calculated from {int(series.count())} usable numeric records."
         )
         action = (
@@ -193,27 +221,34 @@ def compute_kpi_cards(df: pd.DataFrame) -> list[dict[str, Any]]:
         )
         cards.append(
             _format_card(
-                f"Total {pretty}",
-                total,
+                f"{aggregate_name.title()} {pretty}",
+                primary_value,
                 category="business",
                 current_value=current,
                 previous_value=previous,
                 delta_percentage=delta,
                 trend=trend,
                 status=status,
-                business_context=f"Total {pretty}; trend compares later records against earlier records.",
+                business_context=f"{aggregate_name.title()} {pretty}; selected because {suitability['reason']}",
                 description=reason,
             )
         )
-        cards[-1]["sparkline"] = _sparkline(series)
+        cards[-1]["sparkline"] = _sparkline(series, aggregation=aggregation)
         cards[-1]["reason"] = reason
         cards[-1]["recommended_action"] = action
         cards[-1]["expected_impact"] = _impact_from_delta(delta)
+        cards[-1]["metric_suitability"] = suitability
+        cards[-1]["data_confidence"] = cards[-1]["confidence_score"]
+        cards[-1]["business_confidence"] = suitability["business_confidence"]
+        cards[-1]["business_relevance"] = suitability["business_relevance"]
         cards[-1]["evidence"] = {
             "records": int(series.count()),
             "current_period": to_json_safe(round(current, 4)) if current is not None else None,
             "previous_period": to_json_safe(round(previous, 4)) if previous is not None else None,
             "top_segment": driver,
+            "aggregation": aggregation,
+            "total": to_json_safe(total),
+            "average": to_json_safe(average),
         }
         cards.append(
             _format_card(
@@ -223,7 +258,7 @@ def compute_kpi_cards(df: pd.DataFrame) -> list[dict[str, Any]]:
                 business_context=f"Average value across usable {pretty} records.",
             )
         )
-        cards[-1]["sparkline"] = _sparkline(series)
+        cards[-1]["sparkline"] = _sparkline(series, aggregation="average")
         cards[-1]["reason"] = f"Average {pretty} is based on {int(series.count())} non-empty records."
         cards[-1]["recommended_action"] = f"Monitor outliers and segment-level variance before using average {pretty} for targets."
         cards[-1]["expected_impact"] = "Better segment targeting can improve planning accuracy and reduce blended-average bias."
@@ -259,23 +294,22 @@ def compute_business_metrics(df: pd.DataFrame) -> dict[str, Any]:
     categorical_columns = column_types["categorical_columns"]
     financial_columns = [col for col in numeric_columns if _is_financial_column(col)]
 
-    primary_metric = financial_columns[0] if financial_columns else (numeric_columns[0] if numeric_columns else None)
+    primary_metric, suitability = select_primary_metric(df, numeric_columns)
     primary_segment = categorical_columns[0] if categorical_columns else None
     segment_leader = None
 
     if primary_metric and primary_segment:
-        grouped = (
-            df.groupby(primary_segment)[primary_metric]
-            .sum(numeric_only=True)
-            .sort_values(ascending=False)
-            .head(1)
-        )
+        aggregation = suitability["recommended_aggregation"] if suitability else "sum"
+        groupby = df.groupby(primary_segment)[primary_metric]
+        grouped = (groupby.sum(numeric_only=True) if aggregation == "sum" else groupby.mean(numeric_only=True)).sort_values(ascending=False).head(1)
         if not grouped.empty:
             segment_leader = {
                 "dimension": primary_segment,
                 "metric": primary_metric,
                 "segment": str(grouped.index[0]),
                 "value": to_json_safe(round(float(grouped.iloc[0]), 4)),
+                "aggregation": aggregation,
+                "business_relevance": suitability.get("business_relevance") if suitability else "medium",
             }
 
     return {
@@ -283,4 +317,5 @@ def compute_business_metrics(df: pd.DataFrame) -> dict[str, Any]:
         "primary_segment": primary_segment,
         "financial_columns": financial_columns,
         "segment_leader": segment_leader,
+        "metric_suitability": suitability,
     }

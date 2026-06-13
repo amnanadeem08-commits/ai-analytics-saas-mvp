@@ -7,6 +7,7 @@ import pandas as pd
 
 from backend.processing.column_detector import detect_column_types
 from backend.processing.data_profiler import profile_dataframe
+from backend.services.metric_suitability_service import aggregate_label, aggregate_series, metric_suitability
 from backend.utils.response_utils import to_json_safe
 
 
@@ -111,45 +112,51 @@ def generate_rule_based_insights(df: pd.DataFrame) -> list[dict[str, Any]]:
 
     for column in numeric_columns[:3]:
         summary = profile["numeric_summary"].get(column, {})
+        suitability = metric_suitability(column, df[column])
+        preferred_aggregation = suitability["recommended_aggregation"]
+        preferred_label = aggregate_label(preferred_aggregation)
+        preferred_value = aggregate_series(df[column], preferred_aggregation) if suitability["is_valid_metric"] else None
         insights.append(
             {
                 "type": "metric",
                 "title": f"{column.replace('_', ' ').title()} summary",
                 "message": (
-                    f"{column} has total {_format_number(summary.get('sum'))}, "
+                    f"{column} has {preferred_label} {_format_number(round(preferred_value, 4) if preferred_value is not None else None)}, "
                     f"average {_format_number(summary.get('mean'))}, "
                     f"minimum {_format_number(summary.get('min'))}, "
-                    f"and maximum {_format_number(summary.get('max'))}."
+                    f"and maximum {_format_number(summary.get('max'))}. "
+                    f"Metric suitability: {suitability['reason']}"
                 ),
                 "severity": "info",
-                "metadata": summary,
+                "metadata": {"metric_suitability": suitability, **summary},
             }
         )
 
     if categorical_columns and numeric_columns:
         category_column = categorical_columns[0]
         metric_column = numeric_columns[0]
-        grouped = (
-            df.groupby(category_column, dropna=False)[metric_column]
-            .sum()
-            .sort_values(ascending=False)
-            .head(1)
-        )
+        suitability = metric_suitability(metric_column, df[metric_column])
+        aggregation = suitability["recommended_aggregation"]
+        groupby = df.groupby(category_column, dropna=False)[metric_column]
+        grouped = (groupby.sum() if aggregation == "sum" else groupby.mean()).sort_values(ascending=False).head(1)
         if not grouped.empty:
             top_label = grouped.index[0]
             top_value = grouped.iloc[0]
             insights.append(
                 {
                     "type": "performance",
-                    "title": f"Top {category_column.replace('_', ' ')} by {metric_column}",
+                    "title": f"Top {category_column.replace('_', ' ')} by {aggregate_label(aggregation)} {metric_column}",
                     "message": (
-                        f"{top_label} is the top {category_column} by {metric_column}, "
-                        f"with total {_format_number(top_value)}."
+                        f"{top_label} has the highest {aggregate_label(aggregation)} {metric_column} "
+                        f"across {category_column}, with {_format_number(top_value)}. "
+                        f"{suitability['reason']}"
                     ),
                     "severity": "success",
                     "metadata": {
                         "category_column": category_column,
                         "metric_column": metric_column,
+                        "aggregation": aggregation,
+                        "metric_suitability": suitability,
                         "top_label": str(top_label),
                         "top_value": to_json_safe(top_value),
                     },
