@@ -1,0 +1,25 @@
+date,product,category,region,sales,profit,quantity,customer_type
+2026-01-01,EasyDash Basic,Software,Sindh,1200,320,3,New
+2026-01-03,EasyDash Pro,Software,Punjab,2500,850,5,Returning
+2026-01-07,Insight Pack,Add-on,Sindh,900,260,2,New
+2026-01-12,EasyDash Pro,Software,Khyber Pakhtunkhwa,2200,720,4,Returning
+2026-01-19,Data Cleanser,Service,Balochistan,1500,500,1,Enterprise
+2026-02-02,EasyDash Basic,Software,Sindh,1400,410,4,Returning
+2026-02-08,Insight Pack,Add-on,Punjab,1100,350,3,New
+2026-02-14,Data Cleanser,Service,Sindh,1800,640,2,Enterprise
+2026-02-20,EasyDash Pro,Software,Punjab,2800,900,6,Returning
+2026-03-01,EasyDash Basic,Software,Balochistan,1000,250,2,New
+2026-03-05,Insight Pack,Add-on,Sindh,1300,420,4,Returning
+2026-03-11,EasyDash Pro,Software,Sindh,3200,1100,7,Enterprise
+2026-03-18,Data Cleanser,Service,Punjab,2100,760,3,Enterprise
+2026-04-03,EasyDash Basic,Software,Khyber Pakhtunkhwa,1600,470,4,New
+2026-04-10,Insight Pack,Add-on,Sindh,1500,490,5,Returning
+2026-04-15,EasyDash Pro,Software,Punjab,3500,1250,8,Enterprise
+2026-04-22,Data Cleanser,Service,Sindh,2300,810,3,Enterprise
+2026-05-01,EasyDash Basic,Software,Sindh,1750,520,5,Returning
+2026-05-09,Insight Pack,Add-on,Balochistan,1250,380,3,New
+2026-05-16,EasyDash Pro,Software,Sindh,3700,1320,9,Enterprise
+2026-05-24,Data Cleanser,Service,Punjab,2400,830,4,Enterprise
+2026-06-02,EasyDash Basic,Software,Khyber Pakhtunkhwa,1650,500,4,New
+2026-06-08,Insight Pack,Add-on,Punjab,1450,460,4,Returning
+2026-06-12,EasyDash Pro,Software,Sindh,3900,1400,10,Enterprise
