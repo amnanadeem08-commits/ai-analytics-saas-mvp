@@ -87,6 +87,8 @@ class DashboardResponse(BaseModel):
     domain_intelligence: dict[str, Any] = {}
     regional_analytics: dict[str, Any] = {}
     analysis_guardrails: dict[str, Any] = {}
+    data_quality_score: dict[str, Any] = {}
+    suggested_questions: list[str] = []
     layout: DashboardLayout
     column_types: ColumnTypes
     top_categories: dict[str, list[dict[str, Any]]]

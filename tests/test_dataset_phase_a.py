@@ -80,6 +80,8 @@ def test_upload_persists_dataset_record_and_status(monkeypatch):
         assert dashboard_body["regional_analytics"]["available"] is True
         assert dashboard_body["analysis_guardrails"]["supports"]["comparison_analysis"] is True
         assert dashboard_body["analysis_guardrails"]["supports"]["time_intelligence"] is False
+        assert dashboard_body["data_quality_score"]["grade"]
+        assert dashboard_body["suggested_questions"]
         assert any(chart["section"] == "geographic" for chart in dashboard_body["chart_specs"])
         assert dashboard_body["business_metrics"]["segment_leader"]["dimension"] == "region"
         assert dashboard_body["business_metrics"]["segment_leader"]["metric"] == "sales"
