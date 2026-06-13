@@ -615,6 +615,21 @@ def render_export_downloads(
     st.caption(
         "Click one format to generate and download it. Large PDF/PPTX exports may take a moment, but the page will not time out."
     )
+    download_path = "C:\\Users\\DELL\\Downloads"
+    file_names = {
+        "JSON": f"{dataset_id}_report.json",
+        "CSV": f"{dataset_id}.csv",
+        "PDF": f"{dataset_id}_executive_report.pdf",
+        "PPTX": f"{dataset_id}_executive_deck.pptx",
+        "PNG": f"{dataset_id}_dashboard_snapshot.png",
+    }
+    st.info(
+        f"Download location: browser Downloads folder, usually `{download_path}` on this machine. "
+        "If your browser asks where to save files, it will use the folder you choose."
+    )
+    with st.expander("Export file names"):
+        for label, file_name in file_names.items():
+            st.write(f"**{label}:** `{file_name}`")
 
     safe_prefix = f"{label_prefix} " if label_prefix else ""
     col1, col2, col3, col4, col5 = st.columns(5)
