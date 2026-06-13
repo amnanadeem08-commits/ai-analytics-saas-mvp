@@ -117,6 +117,29 @@ def build_executive_pdf(
         ]
     )
 
+    quality = report.get("data_quality_score", {})
+    if quality:
+        story.extend(
+            [
+                _paragraph("Data Quality", styles["Section"]),
+                _wrapped_table(
+                    [
+                        ["Score", "Grade", "Completeness", "Duplicate Rate", "Meaning"],
+                        [
+                            quality.get("score", ""),
+                            quality.get("grade", ""),
+                            f"{quality.get('completeness_pct', '')}%",
+                            f"{quality.get('duplicate_pct', '')}%",
+                            quality.get("explanation", ""),
+                        ],
+                    ],
+                    [0.75 * inch, 0.65 * inch, 1.05 * inch, 1.05 * inch, 2.85 * inch],
+                    primary,
+                    styles["WrappedBody"],
+                ),
+            ]
+        )
+
     kpi_rows = [["KPI", "Value", "Variance", "Business Evidence"]]
     for card in report.get("kpi_cards", [])[:8]:
         kpi_rows.append(
@@ -147,6 +170,24 @@ def build_executive_pdf(
                     Spacer(1, 0.07 * inch),
                 ]
             )
+        )
+
+    recommendations = executive.get("recommendations", [])
+    if recommendations:
+        rec_rows = [["Recommendation", "Reason", "Expected Impact"]]
+        for item in recommendations[:8]:
+            rec_rows.append(
+                [
+                    item.get("recommendation", ""),
+                    item.get("reason", ""),
+                    item.get("expected_impact", ""),
+                ]
+            )
+        story.extend(
+            [
+                _paragraph("Recommendations", styles["Section"]),
+                _wrapped_table(rec_rows, [2.0 * inch, 2.0 * inch, 2.35 * inch], accent, styles["WrappedBody"]),
+            ]
         )
 
     charts = filter_charts(report, chart_ids)

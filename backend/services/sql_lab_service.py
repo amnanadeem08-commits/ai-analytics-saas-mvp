@@ -113,10 +113,11 @@ def _quote_literal(value: str) -> str:
 
 def _numeric_filter(prompt: str, column: str) -> str | None:
     readable = column.lower().replace("_", " ")
-    pattern = rf"(?:{re.escape(readable)}\s*)?(>=|<=|>|<|=)?\s*(\d+(?:\.\d+)?)"
-    if readable not in prompt.lower() and column.lower() not in {"age"}:
+    lowered = prompt.lower()
+    if readable not in lowered:
         return None
-    match = re.search(pattern, prompt.lower())
+    pattern = rf"\b{re.escape(readable)}\b\s*(>=|<=|>|<|=)?\s*(\d+(?:\.\d+)?)"
+    match = re.search(pattern, lowered)
     if not match:
         return None
     operator = match.group(1)

@@ -4,6 +4,7 @@ from typing import Any
 
 from backend.core.branding_manager import branding_manager
 from backend.processing.analytics_engine import build_dashboard_stats
+from backend.processing.data_profiler import profile_dataframe
 from backend.processing.overview_service import build_dataset_overview
 from backend.core.theme_manager import theme_manager
 from backend.services.analysis_guardrail_service import build_analysis_guardrails
@@ -13,6 +14,7 @@ from backend.services.domain_intelligence_service import build_domain_intelligen
 from backend.services.filter_service import apply_filters
 from backend.services.geospatial_service import generate_geo_chart_specs, regional_analytics
 from backend.services.kpi_service import compute_business_metrics, compute_kpi_cards
+from backend.services.suggested_question_service import build_suggested_questions
 
 
 def build_dashboard_view(dataset_id: str, filters: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -23,8 +25,10 @@ def build_dashboard_view(dataset_id: str, filters: dict[str, Any] | None = None)
     df = apply_filters(df, filters)
     legacy_stats = build_dashboard_stats(df)
     overview = build_dataset_overview(df, preview_rows=5)
+    profile = profile_dataframe(df)
     kpi_cards = compute_kpi_cards(df)
     domain_intelligence = build_domain_intelligence(df)
+    business_metrics = compute_business_metrics(df)
     for index, card in enumerate(domain_intelligence.get("domain_kpis", [])):
         kpi_cards.insert(
             min(index, len(kpi_cards)),
@@ -111,10 +115,16 @@ def build_dashboard_view(dataset_id: str, filters: dict[str, Any] | None = None)
         },
         "kpi_cards": kpi_cards,
         "chart_specs": chart_specs,
-        "business_metrics": compute_business_metrics(df),
+        "business_metrics": business_metrics,
         "domain_intelligence": domain_intelligence,
         "regional_analytics": regional,
         "analysis_guardrails": build_analysis_guardrails(df),
+        "data_quality_score": profile.get("data_quality_score", {}),
+        "suggested_questions": build_suggested_questions(
+            business_metrics=business_metrics,
+            domain_intelligence=domain_intelligence,
+            profile=profile,
+        ),
         "layout": {"sections": sections},
         **legacy_stats,
     }

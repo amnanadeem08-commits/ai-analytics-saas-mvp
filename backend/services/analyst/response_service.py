@@ -50,16 +50,20 @@ def build_answer(question: str, intent: AnalystIntent, result: AnalystQueryResul
         if intent.metric_column:
             return f"The total {intent.metric_column} is {_format_number(result.supporting_data[intent.metric_column])}."
     if intent.intent == "grouped_total" and intent.metric_column and intent.dimension_column:
-        pairs = list(result.supporting_data.items())[:10]
-        return f"Total {intent.metric_column} by {intent.dimension_column}: " + ", ".join(
+        values = result.supporting_data.get("values", result.supporting_data)
+        aggregation_label = result.supporting_data.get("aggregation_label", "total")
+        pairs = list(values.items())[:10]
+        return f"{aggregation_label.title()} {intent.metric_column} by {intent.dimension_column}: " + ", ".join(
             f"{key}: {_format_number(value)}" for key, value in pairs
         )
     if intent.intent in {"top", "bottom"} and result.rows:
         row = result.rows[0]
         label = "top" if intent.intent == "top" else "bottom"
         if "dimension" in row:
+            aggregation_label = row.get("aggregation_label", "")
+            metric_label = f"{aggregation_label} {row['metric']}".strip()
             return (
-                f"The {label} {row['dimension']} by {row['metric']} is {row['label']} "
+                f"The {label} {row['dimension']} by {metric_label} is {row['label']} "
                 f"with {_format_number(row['value'])}."
             )
         return f"The {label} {row['metric']} value is {_format_number(row['value'])}."
@@ -75,4 +79,3 @@ def build_answer(question: str, intent: AnalystIntent, result: AnalystQueryResul
         "I can answer dataset questions about row count, columns, missing values, duplicates, "
         "totals, averages, minimums, maximums, top categories, and summaries."
     )
-

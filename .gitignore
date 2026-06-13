@@ -6,8 +6,8 @@ __pycache__/
 venv/
 .pytest_cache/
 .streamlit/
-data/uploads/*.csv
-data/processed/*.csv
+data/uploads/*
+data/processed/*
 data/datasets/
 data/test_runs/
 data/metadata/

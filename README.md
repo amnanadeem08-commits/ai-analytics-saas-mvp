@@ -8,7 +8,7 @@ A local-first AI Analytics SaaS MVP built with:
 - Storage: Local CSV + JSON metadata
 - AI layer: Rule-based insights + LLM-ready placeholder
 
-This MVP is intentionally simple and modular. It supports CSV upload, validation, preview, summary statistics, basic dashboards, AI-style insights, and natural language questions over uploaded datasets.
+This MVP is intentionally simple and modular. It supports CSV/Excel upload, validation, preview, executive dashboards, KPI cards, Plotly charts, business-safe insights, SQL/DAX workbenches, and export-ready PDF/PPTX/XLSX/PNG reports over uploaded datasets.
 
 ---
 
@@ -130,6 +130,36 @@ Which product has the highest sales?
 What is the average profit?
 Are there missing values?
 Show total sales by region.
+```
+
+---
+
+## Exports
+
+Reports can be downloaded from the Streamlit export panels or directly from:
+
+```text
+GET /report/{dataset_id}/export?format=pdf
+GET /report/{dataset_id}/export?format=pptx
+GET /report/{dataset_id}/export?format=xlsx
+GET /report/{dataset_id}/export?format=png
+GET /report/{dataset_id}/export?format=json
+GET /report/{dataset_id}/export?format=csv
+```
+
+Browser downloads usually save to your system Downloads folder.
+
+Generated runtime data is intentionally ignored by Git:
+
+```text
+data/uploads/
+data/processed/
+data/datasets/
+data/metadata/
+data/test_runs/
+*.log
+*.pid
+*.job
 ```
 
 ---

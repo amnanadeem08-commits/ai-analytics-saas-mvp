@@ -67,6 +67,30 @@ def generate_rule_based_insights(df: pd.DataFrame) -> list[dict[str, Any]]:
             "metadata": {
                 "row_count": profile["row_count"],
                 "column_count": profile["column_count"],
+                "what_happened": f"{_format_number(profile['row_count'])} rows and {_format_number(profile['column_count'])} columns were analyzed.",
+                "why_it_matters": "This defines the evidence base for KPI, chart, and executive-summary reliability.",
+                "evidence_from_data": {"row_count": profile["row_count"], "column_count": profile["column_count"]},
+                "recommended_action": "Use this as the scope baseline before interpreting KPI movement or segment differences.",
+            },
+        }
+    )
+
+    quality = profile.get("data_quality_score", {})
+    insights.append(
+        {
+            "type": "data_quality_score",
+            "title": f"Data quality grade {quality.get('grade', 'N/A')}",
+            "message": (
+                f"Data quality score is {quality.get('score')} with {quality.get('completeness_pct')}% completeness "
+                f"and {quality.get('duplicate_pct')}% duplicate rows."
+            ),
+            "severity": "success" if quality.get("grade") in {"A", "B"} else "warning",
+            "metadata": {
+                **quality,
+                "what_happened": f"Quality score is {quality.get('score')} ({quality.get('grade')}).",
+                "why_it_matters": "Quality issues can distort KPI totals, averages, and segment comparisons.",
+                "evidence_from_data": quality,
+                "recommended_action": "Resolve missing values and duplicates before using the dataset for board-level decisions.",
             },
         }
     )
@@ -85,7 +109,13 @@ def generate_rule_based_insights(df: pd.DataFrame) -> list[dict[str, Any]]:
                     f"Most affected columns: {top_missing_text}."
                 ),
                 "severity": "warning",
-                "metadata": {"missing_values_by_column": profile["missing_values_by_column"]},
+                "metadata": {
+                    "missing_values_by_column": profile["missing_values_by_column"],
+                    "what_happened": f"{_format_number(profile['total_missing_values'])} missing values were found.",
+                    "why_it_matters": "Missing values can bias averages, reduce confidence, and hide true segment performance.",
+                    "evidence_from_data": {"missing_values_by_column": profile["missing_values_by_column"]},
+                    "recommended_action": "Prioritize columns with the most missing values for cleaning or exclusion.",
+                },
             }
         )
     else:
@@ -95,7 +125,12 @@ def generate_rule_based_insights(df: pd.DataFrame) -> list[dict[str, Any]]:
                 "title": "No missing values found",
                 "message": "No missing values were detected in the cleaned dataset.",
                 "severity": "success",
-                "metadata": {},
+                "metadata": {
+                    "what_happened": "No missing values were detected.",
+                    "why_it_matters": "Complete fields improve confidence in KPI and visual interpretation.",
+                    "evidence_from_data": {"total_missing_values": 0},
+                    "recommended_action": "Continue with KPI and segment analysis, while still checking duplicates and outliers.",
+                },
             }
         )
 
@@ -106,7 +141,13 @@ def generate_rule_based_insights(df: pd.DataFrame) -> list[dict[str, Any]]:
                 "title": "Duplicate rows found",
                 "message": f"The dataset contains {_format_number(profile['duplicate_rows'])} duplicate rows.",
                 "severity": "warning",
-                "metadata": {"duplicate_rows": profile["duplicate_rows"]},
+                "metadata": {
+                    "duplicate_rows": profile["duplicate_rows"],
+                    "what_happened": f"{_format_number(profile['duplicate_rows'])} duplicate rows were detected.",
+                    "why_it_matters": "Duplicates can inflate counts and additive business metrics.",
+                    "evidence_from_data": {"duplicate_rows": profile["duplicate_rows"]},
+                    "recommended_action": "Deduplicate records or verify whether repeated rows represent valid transactions.",
+                },
             }
         )
 
@@ -128,7 +169,75 @@ def generate_rule_based_insights(df: pd.DataFrame) -> list[dict[str, Any]]:
                     f"Metric suitability: {suitability['reason']}"
                 ),
                 "severity": "info",
-                "metadata": {"metric_suitability": suitability, **summary},
+                "metadata": {
+                    "metric_suitability": suitability,
+                    "what_happened": f"{column} has {preferred_label} {_format_number(round(preferred_value, 4) if preferred_value is not None else None)}.",
+                    "why_it_matters": suitability["reason"],
+                    "evidence_from_data": summary,
+                    "recommended_action": "Use the suitability rule before selecting KPI cards or executive chart titles.",
+                    **summary,
+                },
+            }
+        )
+
+    for outlier in profile.get("outlier_summary", [])[:3]:
+        insights.append(
+            {
+                "type": "outlier",
+                "title": f"Outliers detected in {outlier['column']}",
+                "message": (
+                    f"{outlier['outlier_count']} records ({outlier['outlier_pct']}%) fall outside the IQR bounds "
+                    f"for {outlier['column']}."
+                ),
+                "severity": "warning",
+                "metadata": {
+                    **outlier,
+                    "what_happened": f"{outlier['outlier_count']} outliers were detected in {outlier['column']}.",
+                    "why_it_matters": "Outliers can skew averages, charts, and executive KPI summaries.",
+                    "evidence_from_data": outlier,
+                    "recommended_action": "Review whether these values are valid exceptional cases or data-entry issues.",
+                },
+            }
+        )
+
+    for relationship in profile.get("correlation_summary", [])[:3]:
+        insights.append(
+            {
+                "type": "correlation",
+                "title": f"{relationship['strength'].title()} relationship: {relationship['column_a']} and {relationship['column_b']}",
+                "message": (
+                    f"{relationship['column_a']} and {relationship['column_b']} show a "
+                    f"{relationship['direction']} correlation of {relationship['correlation']}. "
+                    "This is a relationship signal, not proof of causation."
+                ),
+                "severity": "info",
+                "metadata": {
+                    **relationship,
+                    "what_happened": "A numeric relationship signal was detected.",
+                    "why_it_matters": "Strong relationships can guide drill-down analysis and dashboard cross-filtering.",
+                    "evidence_from_data": relationship,
+                    "recommended_action": "Use a scatter plot or segmented view to validate the relationship before acting.",
+                },
+            }
+        )
+
+    for trend in profile.get("trend_summary", [])[:3]:
+        insights.append(
+            {
+                "type": "trend",
+                "title": f"{trend['metric']} {trend['direction']} over time",
+                "message": (
+                    f"{trend['metric']} moved from {trend['first_value']} in {trend['first_period']} "
+                    f"to {trend['last_value']} in {trend['last_period']} ({trend['change_pct']}%)."
+                ),
+                "severity": "success" if trend["direction"] == "increased" else "warning" if trend["direction"] == "decreased" else "info",
+                "metadata": {
+                    **trend,
+                    "what_happened": f"{trend['metric']} {trend['direction']} across {trend['periods']} periods.",
+                    "why_it_matters": "Trend direction helps leaders separate one-time values from sustained movement.",
+                    "evidence_from_data": trend,
+                    "recommended_action": "Compare this trend by segment to identify where the movement is concentrated.",
+                },
             }
         )
 
@@ -157,6 +266,10 @@ def generate_rule_based_insights(df: pd.DataFrame) -> list[dict[str, Any]]:
                         "metric_column": metric_column,
                         "aggregation": aggregation,
                         "metric_suitability": suitability,
+                        "what_happened": f"{top_label} has the highest {aggregate_label(aggregation)} {metric_column}.",
+                        "why_it_matters": "Segment leaders help prioritize drill-down and management attention.",
+                        "evidence_from_data": {"top_label": str(top_label), "top_value": to_json_safe(top_value)},
+                        "recommended_action": f"Compare {top_label} against lower-performing {category_column} values before taking action.",
                         "top_label": str(top_label),
                         "top_value": to_json_safe(top_value),
                     },

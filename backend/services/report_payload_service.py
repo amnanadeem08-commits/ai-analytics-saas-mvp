@@ -24,6 +24,8 @@ def build_report_payload(dataset_id: str) -> dict[str, Any]:
         "domain_intelligence": dashboard.get("domain_intelligence", {}),
         "regional_analytics": dashboard.get("regional_analytics", {}),
         "analysis_guardrails": dashboard.get("analysis_guardrails", {}),
+        "data_quality_score": dashboard.get("data_quality_score", {}),
+        "suggested_questions": dashboard.get("suggested_questions", []),
         "chart_specs": dashboard["chart_specs"],
         "chart_count": len(dashboard["chart_specs"]),
     }

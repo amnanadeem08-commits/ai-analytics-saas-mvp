@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 from backend.core.config import ensure_data_directories, settings
+from backend.core.theme_manager import theme_manager
 from backend.main import app
 
 
@@ -24,6 +25,7 @@ def test_upload_persists_dataset_record_and_status(monkeypatch):
     monkeypatch.setattr(settings, "SQL_QUERIES_FILE", test_root / "metadata" / "sql_queries.json")
     monkeypatch.setattr(settings, "THEME_STATE_FILE", test_root / "metadata" / "theme_state.json")
     ensure_data_directories()
+    theme_manager.set_active("power_bi_professional")
 
     try:
         client = TestClient(app)
@@ -79,12 +81,12 @@ def test_upload_persists_dataset_record_and_status(monkeypatch):
         assert dashboard_body["analysis_guardrails"]["supports"]["comparison_analysis"] is True
         assert dashboard_body["analysis_guardrails"]["supports"]["time_intelligence"] is False
         assert any(chart["section"] == "geographic" for chart in dashboard_body["chart_specs"])
-        assert dashboard_body["business_metrics"]["segment_leader"] == {
-            "dimension": "region",
-            "metric": "sales",
-            "segment": "South",
-            "value": 150.0,
-        }
+        assert dashboard_body["business_metrics"]["segment_leader"]["dimension"] == "region"
+        assert dashboard_body["business_metrics"]["segment_leader"]["metric"] == "sales"
+        assert dashboard_body["business_metrics"]["segment_leader"]["segment"] == "South"
+        assert dashboard_body["business_metrics"]["segment_leader"]["value"] == 150.0
+        assert dashboard_body["business_metrics"]["segment_leader"]["aggregation"] == "sum"
+        assert dashboard_body["business_metrics"]["segment_leader"]["business_relevance"] == "high"
         assert dashboard_body["chart_specs"]
         first_chart = dashboard_body["chart_specs"][0]
         assert first_chart["plotly"]["data"]
@@ -130,7 +132,7 @@ def test_upload_persists_dataset_record_and_status(monkeypatch):
         )
         assert analyst.status_code == 200
         analyst_body = analyst.json()
-        assert analyst_body["answer"] == "The top region by sales is South with 150."
+        assert analyst_body["answer"] == "The top region by total sales is South with 150."
         assert analyst_body["analyst"]["intent"] == "top"
         assert analyst_body["analyst"]["metric_column"] == "sales"
         assert analyst_body["analyst"]["dimension_column"] == "region"
@@ -179,6 +181,8 @@ def test_upload_persists_dataset_record_and_status(monkeypatch):
         assert report.json()["branding"]["report_title"] == "Executive Decision Intelligence Report"
         assert report.json()["business_story"]["business_story"]
         assert report.json()["analysis_guardrails"]["invalid_methods"]
+        assert report.json()["data_quality_score"]["grade"]
+        assert report.json()["suggested_questions"]
 
         csv_export = client.get(f"/report/{dataset_id}/export", params={"format": "csv"})
         assert csv_export.status_code == 200
@@ -189,6 +193,9 @@ def test_upload_persists_dataset_record_and_status(monkeypatch):
         pptx_export = client.get(f"/report/{dataset_id}/export", params={"format": "pptx"})
         assert pptx_export.status_code == 200
         assert pptx_export.content.startswith(b"PK")
+        xlsx_export = client.get(f"/report/{dataset_id}/export", params={"format": "xlsx"})
+        assert xlsx_export.status_code == 200
+        assert xlsx_export.content.startswith(b"PK")
         png_export = client.get(f"/report/{dataset_id}/export", params={"format": "png"})
         assert png_export.status_code == 200
         assert png_export.content.startswith(b"\x89PNG")

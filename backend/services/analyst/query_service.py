@@ -7,6 +7,7 @@ import pandas as pd
 
 from backend.processing.data_profiler import profile_dataframe
 from backend.services.analyst.intent_service import AnalystIntent
+from backend.services.metric_suitability_service import aggregate_label, metric_suitability
 from backend.utils.response_utils import to_json_safe
 
 
@@ -81,36 +82,43 @@ def execute_intent(df: pd.DataFrame, intent: AnalystIntent) -> AnalystQueryResul
                 "metric",
             )
     if intent.intent == "grouped_total" and intent.metric_column and intent.dimension_column:
-        grouped = (
-            df.groupby(intent.dimension_column, dropna=False)[intent.metric_column]
-            .sum()
-            .sort_values(ascending=False)
-        )
+        suitability = metric_suitability(intent.metric_column, df[intent.metric_column])
+        aggregation = suitability["recommended_aggregation"]
+        groupby = df.groupby(intent.dimension_column, dropna=False)[intent.metric_column]
+        grouped = (groupby.sum() if aggregation == "sum" else groupby.mean()).sort_values(ascending=False)
         rows = [
             {
                 intent.dimension_column: str(index),
                 intent.metric_column: _number(value),
+                "aggregation": aggregation,
             }
             for index, value in grouped.items()
         ]
         return AnalystQueryResult(
             rows,
-            {row[intent.dimension_column]: row[intent.metric_column] for row in rows},
+            {
+                "aggregation": aggregation,
+                "aggregation_label": aggregate_label(aggregation),
+                "metric_suitability": suitability,
+                "values": {row[intent.dimension_column]: row[intent.metric_column] for row in rows},
+            },
             "ranked_table",
         )
     if intent.intent in {"top", "bottom"} and intent.metric_column:
         if intent.dimension_column:
-            grouped = (
-                df.groupby(intent.dimension_column, dropna=False)[intent.metric_column]
-                .sum()
-                .sort_values(ascending=intent.intent == "bottom")
-            )
+            suitability = metric_suitability(intent.metric_column, df[intent.metric_column])
+            aggregation = suitability["recommended_aggregation"]
+            groupby = df.groupby(intent.dimension_column, dropna=False)[intent.metric_column]
+            grouped = (groupby.sum() if aggregation == "sum" else groupby.mean()).sort_values(ascending=intent.intent == "bottom")
             if not grouped.empty:
                 row = {
                     "dimension": intent.dimension_column,
                     "metric": intent.metric_column,
                     "label": str(grouped.index[0]),
                     "value": _number(grouped.iloc[0]),
+                    "aggregation": aggregation,
+                    "aggregation_label": aggregate_label(aggregation),
+                    "metric_suitability": suitability,
                 }
                 return AnalystQueryResult([row], row, "ranked_table")
         series = pd.to_numeric(df[intent.metric_column], errors="coerce")
@@ -140,4 +148,3 @@ def execute_intent(df: pd.DataFrame, intent: AnalystIntent) -> AnalystQueryResul
         },
         "unknown",
     )
-

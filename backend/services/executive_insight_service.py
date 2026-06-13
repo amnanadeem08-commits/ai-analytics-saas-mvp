@@ -134,6 +134,27 @@ def build_executive_summary(df: pd.DataFrame) -> dict[str, Any]:
             f"{primary_metric} {delta['direction']}: {delta['previous_period']} to {delta['current_period']} "
             f"({delta['delta_pct']}%)"
         )
+    quality = profile.get("data_quality_score", {})
+    if quality:
+        evidence.append(f"Data quality score: {quality.get('score')} ({quality.get('grade')})")
+    if profile.get("outlier_summary"):
+        top_outlier = profile["outlier_summary"][0]
+        evidence.append(
+            f"Outlier warning: {top_outlier['column']} has {top_outlier['outlier_count']} IQR outliers "
+            f"({top_outlier['outlier_pct']}%)."
+        )
+    if profile.get("correlation_summary"):
+        corr = profile["correlation_summary"][0]
+        evidence.append(
+            f"Correlation signal: {corr['column_a']} and {corr['column_b']} show {corr['correlation']} "
+            f"({corr['direction']}); correlation is not causation."
+        )
+    if profile.get("trend_summary"):
+        trend = profile["trend_summary"][0]
+        evidence.append(
+            f"Trend signal: {trend['metric']} {trend['direction']} from {trend['first_value']} to "
+            f"{trend['last_value']} across {trend['periods']} periods."
+        )
 
     if primary_metric and segment_leader:
         metric_label = _metric_label(primary_metric)
@@ -223,6 +244,14 @@ def build_executive_summary(df: pd.DataFrame) -> dict[str, Any]:
                 "evidence": {"duplicate_rows": int(profile["duplicate_rows"])},
             }
         )
+    for outlier in profile.get("outlier_summary", [])[:2]:
+        risks.append(
+            {
+                "risk": f"Outlier risk in {outlier['column']}",
+                "why_it_matters": f"{outlier['outlier_count']} records sit outside IQR bounds and may skew averages or charts.",
+                "evidence": outlier,
+            }
+        )
     if segment_perf and segment_perf.get("top_share_pct") and segment_perf["top_share_pct"] >= 60:
         risks.append(
             {
@@ -256,6 +285,17 @@ def build_executive_summary(df: pd.DataFrame) -> dict[str, Any]:
                 "evidence": delta,
             }
         )
+    for corr in profile.get("correlation_summary", [])[:2]:
+        opportunities.append(
+            {
+                "opportunity": f"Explore {corr['column_a']} and {corr['column_b']} relationship",
+                "why": (
+                    f"They show a {corr['strength']} {corr['direction']} correlation of {corr['correlation']}. "
+                    "Treat this as a drill-down signal, not a causal claim."
+                ),
+                "evidence": corr,
+            }
+        )
 
     recommendations = []
     if segment_perf:
@@ -279,6 +319,15 @@ def build_executive_summary(df: pd.DataFrame) -> dict[str, Any]:
                 "recommendation": "Resolve missing values before board-level decisions",
                 "reason": f"Completeness is {completeness_pct}% with {missing_cells:,} missing cells.",
                 "expected_impact": "Improves confidence in KPIs and reduces decision risk.",
+            }
+        )
+    if profile.get("outlier_summary"):
+        outlier = profile["outlier_summary"][0]
+        recommendations.append(
+            {
+                "recommendation": f"Validate outliers in {outlier['column']}",
+                "reason": f"{outlier['outlier_count']} records fall outside explainable IQR bounds.",
+                "expected_impact": "Improves reliability of averages, trend charts, and executive KPI interpretation.",
             }
         )
 
@@ -312,6 +361,10 @@ def build_executive_summary(df: pd.DataFrame) -> dict[str, Any]:
             "primary_metric": primary_metric,
             "segment_leader": segment_leader,
             "kpi_count": len(kpi_cards),
+            "data_quality_score": quality,
+            "outlier_count": len(profile.get("outlier_summary", [])),
+            "correlation_count": len(profile.get("correlation_summary", [])),
+            "trend_count": len(profile.get("trend_summary", [])),
         },
         "confidence": confidence,
         "data_confidence": confidence,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 from urllib.parse import urlencode
 
@@ -398,14 +399,137 @@ def _render_kpi_cards(cards: list[dict], theme: dict | None = None) -> None:
             )
 
 
+def _render_dashboard_header(dashboard: dict, summary: dict) -> None:
+    branding = dashboard.get("branding", {})
+    theme = dashboard.get("theme", {})
+    title = html.escape(branding.get("report_title", "Executive Analytics Dashboard"))
+    company = html.escape(branding.get("company_name", "AI Analytics"))
+    primary = theme.get("primary", "#118DFF")
+    muted = theme.get("muted_text", "#64748B")
+    rows = dashboard.get("filtered_row_count", summary.get("row_count", 0))
+    cols = summary.get("column_count", dashboard.get("overview", {}).get("column_count", 0))
+    charts = len(dashboard.get("chart_specs", []))
+    st.markdown(
+        f"""
+        <div style="
+            border: 1px solid rgba(148,163,184,0.26);
+            border-radius: 10px;
+            padding: 18px 20px;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, rgba(17,141,255,0.10), rgba(255,255,255,0.02));
+        ">
+            <div style="font-size:0.76rem;font-weight:800;color:{primary};text-transform:uppercase;">{company}</div>
+            <div style="font-size:1.55rem;font-weight:850;color:var(--text-color);margin-top:2px;">{title}</div>
+            <div style="font-size:0.88rem;color:{muted};margin-top:6px;">
+                {rows:,} active records · {cols:,} columns · {charts:,} generated visuals
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_data_quality_panel(summary: dict, dashboard: dict) -> None:
+    missing = int(summary.get("total_missing_values", 0) or 0)
+    duplicates = int(summary.get("duplicate_rows", 0) or 0)
+    row_count = int(summary.get("row_count", 0) or 0)
+    column_count = int(summary.get("column_count", 0) or 0)
+    total_cells = max(row_count * column_count, 1)
+    completeness = round((1 - missing / total_cells) * 100, 2)
+    grade = "A" if completeness >= 98 and duplicates == 0 else "B" if completeness >= 92 else "C" if completeness >= 80 else "D"
+    status = "Production-ready" if grade == "A" else "Review recommended"
+    analysis_guardrails = dashboard.get("analysis_guardrails", {})
+    with st.container(border=True):
+        st.markdown("#### Data Quality")
+        cols = st.columns([1, 1, 1, 2])
+        cols[0].metric("Grade", grade)
+        cols[1].metric("Completeness", f"{completeness}%")
+        cols[2].metric("Duplicates", f"{duplicates:,}")
+        cols[3].write(f"**Status:** {status}")
+        if missing:
+            cols[3].caption(f"{missing:,} missing cells may affect charts and KPI confidence.")
+        else:
+            cols[3].caption("No missing cells detected in the current dataset view.")
+        invalid = analysis_guardrails.get("invalid_methods", [])
+        if invalid:
+            with st.expander("Analysis guardrails"):
+                for item in invalid:
+                    st.write(f"- {item}")
+
+
+def _render_business_summary(dashboard: dict, insights_payload: dict | None = None) -> None:
+    executive = (insights_payload or {}).get("executive_summary") or {}
+    domain = dashboard.get("domain_intelligence", {}).get("detection", {})
+    with st.container(border=True):
+        st.markdown("#### Executive Summary")
+        if domain:
+            st.caption(f"Detected domain: {domain.get('domain', 'Generic Analytics')} · Confidence: {domain.get('confidence', 'low').title()}")
+        if not executive:
+            st.info("Executive summary is not available yet. Upload a dataset with measurable fields to generate one.")
+            return
+        st.markdown(f"**Insight:** {executive.get('insight', '')}")
+        st.write(f"**Why it matters:** {executive.get('reason', '')}")
+        st.write(f"**Recommended action:** {executive.get('action', '')}")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Data confidence", str(executive.get("data_confidence", executive.get("confidence", "low"))).title())
+        c2.metric("Business confidence", str(executive.get("business_confidence", "medium")).title())
+        c3.metric("Business relevance", str(executive.get("business_relevance", "medium")).title())
+        evidence = executive.get("evidence", [])
+        if evidence:
+            with st.expander("Evidence"):
+                for item in evidence[:8]:
+                    st.write(f"- {item}")
+
+
+def _render_suggested_questions(dashboard: dict) -> None:
+    backend_questions = dashboard.get("suggested_questions") or []
+    if backend_questions:
+        questions = backend_questions
+    else:
+        questions = []
+        metrics = dashboard.get("business_metrics", {})
+        metric = metrics.get("primary_metric")
+        segment = metrics.get("primary_segment")
+        if metric and segment:
+            questions.extend(
+                [
+                    f"Which {segment} has the strongest {metric} performance?",
+                    f"Why is {metric} different across {segment}?",
+                    f"What should management do to improve {metric}?",
+                ]
+            )
+        elif metric:
+            questions.extend(
+                [
+                    f"What is the trend in {metric}?",
+                    f"Which columns explain changes in {metric}?",
+                ]
+            )
+        questions.append("What risks should leadership watch in this dataset?")
+    with st.container(border=True):
+        st.markdown("#### Suggested Questions")
+        for question in questions[:5]:
+            st.write(f"- {question}")
+
+
+def _render_dashboard_preview(preview_rows: list[dict]) -> None:
+    with st.expander("Dataset preview", expanded=False):
+        if preview_rows:
+            st.dataframe(pd.DataFrame(preview_rows), width="stretch")
+        else:
+            st.info("No preview rows are available for this dataset.")
+
+
 def render_dashboard(client: BackendClient) -> None:
-    st.header("Stats Dashboard")
+    st.header("Executive Dashboard")
     dataset_id = select_dataset(client)
     if not dataset_id:
         return
 
     try:
         summary = client.get_summary(dataset_id)
+        preview = client.get_preview(dataset_id, rows=8)
+        insights_payload = client.get_insights(dataset_id)
         schema = client.get_visual_builder_schema(dataset_id)
         filters = _build_filter_payload(schema, "dashboard")
         dashboard = (
@@ -417,7 +541,10 @@ def render_dashboard(client: BackendClient) -> None:
         st.error(f"Could not load analytics: {exc}")
         return
 
+    _render_dashboard_header(dashboard, summary)
     render_summary_metrics(summary)
+    _render_dashboard_preview(preview.get("rows", []))
+    _render_business_summary(dashboard, insights_payload)
     _render_kpi_cards(dashboard.get("kpi_cards", []), dashboard.get("theme", {}))
 
     if dashboard.get("filtered"):
@@ -426,36 +553,32 @@ def render_dashboard(client: BackendClient) -> None:
             f"{dashboard.get('original_row_count', 0):,}"
         )
 
-    st.subheader("Detected Column Types")
-    col_types = summary.get("column_types", {})
-    st.json(col_types)
+    _render_data_quality_panel(summary, dashboard)
 
-    st.subheader("Numeric Summary")
-    numeric_summary = summary.get("numeric_summary", {})
-    if numeric_summary:
-        st.dataframe(pd.DataFrame(numeric_summary).T, width="stretch")
-    else:
-        st.info("No numeric columns detected.")
+    with st.expander("Column profile", expanded=False):
+        col_types = summary.get("column_types", {})
+        st.json(col_types)
+        numeric_summary = summary.get("numeric_summary", {})
+        if numeric_summary:
+            st.dataframe(pd.DataFrame(numeric_summary).T, width="stretch")
+        missing_values = summary.get("missing_values_by_column", {})
+        if missing_values:
+            missing_df = pd.DataFrame(
+                [{"column": key, "missing_values": value} for key, value in missing_values.items()]
+            )
+            st.dataframe(missing_df, width="stretch")
 
-    st.subheader("Missing Values by Column")
-    missing_values = summary.get("missing_values_by_column", {})
-    if missing_values:
-        missing_df = pd.DataFrame(
-            [{"column": key, "missing_values": value} for key, value in missing_values.items()]
-        )
-        st.dataframe(missing_df, width="stretch")
-
-    st.divider()
-    st.subheader("Generated Visuals")
+    st.subheader("Visual Analysis")
     render_plotly_chart_specs(dashboard)
 
-    st.divider()
-    st.subheader("Category Charts")
-    render_top_categories(dashboard)
-
-    st.divider()
-    st.subheader("Time Trends")
-    render_time_trends(dashboard)
+    left, right = st.columns(2)
+    with left:
+        _render_suggested_questions(dashboard)
+    with right:
+        with st.container(border=True):
+            st.markdown("#### Business Insights")
+            for insight in insights_payload.get("insights", [])[:4]:
+                render_insight(insight)
 
 
 def render_ai_insights(client: BackendClient) -> None:
@@ -621,6 +744,7 @@ def render_export_downloads(
         "CSV": f"{dataset_id}.csv",
         "PDF": f"{dataset_id}_executive_report.pdf",
         "PPTX": f"{dataset_id}_executive_deck.pptx",
+        "Excel": f"{dataset_id}_executive_report.xlsx",
         "PNG": f"{dataset_id}_dashboard_snapshot.png",
     }
     st.info(
@@ -632,7 +756,7 @@ def render_export_downloads(
             st.write(f"**{label}:** `{file_name}`")
 
     safe_prefix = f"{label_prefix} " if label_prefix else ""
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     col1.link_button(
         f"{safe_prefix}JSON",
         export_url("json"),
@@ -654,6 +778,11 @@ def render_export_downloads(
         width="stretch",
     )
     col5.link_button(
+        f"{safe_prefix}Excel",
+        export_url("xlsx"),
+        width="stretch",
+    )
+    col6.link_button(
         f"{safe_prefix}PNG",
         export_url("png"),
         width="stretch",

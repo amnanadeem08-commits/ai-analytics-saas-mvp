@@ -192,6 +192,22 @@ def build_executive_pptx(
         primary,
     )
 
+    quality = report.get("data_quality_score", {})
+    if quality:
+        _add_bullet_slides(
+            prs,
+            "Data Quality",
+            "Readiness and reliability",
+            [
+                f"Score: {quality.get('score', '')} ({quality.get('grade', '')})",
+                f"Completeness: {quality.get('completeness_pct', '')}%",
+                f"Duplicate rate: {quality.get('duplicate_pct', '')}%",
+                f"Interpretation: {quality.get('explanation', '')}",
+            ],
+            branding,
+            primary,
+        )
+
     kpi_slide = _new_slide(prs, "Business Health Overview", "Executive KPI cards", branding, primary)
     for index, card in enumerate(report.get("kpi_cards", [])[:8]):
         row = index // 4
