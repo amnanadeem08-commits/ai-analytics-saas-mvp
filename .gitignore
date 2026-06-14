@@ -18,3 +18,4 @@ data/metadata/
 *.pid
 *.job
 .DS_Store
+~$*.pptx
