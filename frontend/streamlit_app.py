@@ -102,20 +102,21 @@ def get_active_branding(client: BackendClient) -> dict:
 
 def render_branding_editor(client: BackendClient, branding: dict) -> None:
     st.sidebar.divider()
-    with st.sidebar.expander("Branding"):
+    with st.sidebar.expander("Branding Settings", expanded=False):
         logo_url = branding.get("logo_url")
         if logo_url:
-            st.image(f"{client.base_url}{logo_url}", width=120)
+            st.image(f"{client.base_url}{logo_url}", width=100)
 
         company_name = st.text_input("Company name", value=branding.get("company_name", "AI Analytics"))
         report_title = st.text_input(
             "Report title",
             value=branding.get("report_title", "Executive Decision Intelligence Report"),
         )
-        primary_color = st.color_picker("Primary", value=branding.get("primary_color", "#118DFF"))
-        secondary_color = st.color_picker("Secondary", value=branding.get("secondary_color", "#12239E"))
-        accent_color = st.color_picker("Accent", value=branding.get("accent_color", "#E66C37"))
-        logo_file = st.file_uploader("Logo", type=["png", "jpg", "jpeg", "webp", "svg"])
+        logo_file = st.file_uploader("Upload Company Logo", type=["png", "jpg", "jpeg", "webp", "svg"])
+        with st.expander("Advanced Color Settings", expanded=False):
+            primary_color = st.color_picker("Primary", value=branding.get("primary_color", "#118DFF"))
+            secondary_color = st.color_picker("Secondary", value=branding.get("secondary_color", "#12239E"))
+            accent_color = st.color_picker("Accent", value=branding.get("accent_color", "#E66C37"))
 
         col1, col2 = st.columns(2)
         if col1.button("Save", use_container_width=True):
@@ -159,7 +160,7 @@ def get_dataset_options(client: BackendClient) -> list[dict]:
         return []
 
 
-def select_dataset(client: BackendClient) -> str | None:
+def select_dataset(client: BackendClient, key: str | None = None) -> str | None:
     datasets = get_dataset_options(client)
     if not datasets:
         st.info("No datasets found. Upload a CSV first.")
@@ -179,7 +180,7 @@ def select_dataset(client: BackendClient) -> str | None:
 
     label_list = list(labels.keys())
     index = label_list.index(default_label) if default_label in label_list else 0
-    selected_label = st.selectbox("Select dataset", label_list, index=index)
+    selected_label = st.selectbox("Select dataset", label_list, index=index, key=key or "select_dataset_default")
     dataset_id = labels[selected_label]
     st.session_state["selected_dataset_id"] = dataset_id
     return dataset_id
@@ -1344,11 +1345,11 @@ def render_presentation_mode(client: BackendClient) -> None:
         )
 
 
-def render_regional_analytics(client: BackendClient) -> None:
-    st.header("Regional Analytics")
-    dataset_id = select_dataset(client)
-    if not dataset_id:
-        return
+def render_regional_analytics(client: BackendClient, dataset_id: str | None = None) -> None:
+    if dataset_id is None:
+        dataset_id = select_dataset(client, key="regional_analytics_dataset")
+        if not dataset_id:
+            return
     try:
         regional = client.get_regional_intelligence(dataset_id)
     except requests.RequestException as exc:
@@ -1373,11 +1374,11 @@ def render_regional_analytics(client: BackendClient) -> None:
             st.json(item.get("evidence", []))
 
 
-def render_geographic_insights(client: BackendClient) -> None:
-    st.header("Geographic Insights")
-    dataset_id = select_dataset(client)
-    if not dataset_id:
-        return
+def render_geographic_insights(client: BackendClient, dataset_id: str | None = None) -> None:
+    if dataset_id is None:
+        dataset_id = select_dataset(client, key="geographic_insights_dataset")
+        if not dataset_id:
+            return
     try:
         regional = client.get_regional_intelligence(dataset_id)
     except requests.RequestException as exc:
@@ -1517,6 +1518,26 @@ def render_dax_studio(client: BackendClient) -> None:
         render_dax_package(st.session_state.get("dax_package", {}))
 
 
+def _build_storyboard_kpis(schema: dict) -> list[dict]:
+    """Build simple KPI cards from visual builder schema metrics."""
+    kpis = []
+    row_count = 0
+    semantic = schema.get("semantic_layer", [])
+    measures = schema.get("measures", [])
+    for field in semantic:
+        if field.get("semantic_role") in {"revenue_currency_column"}:
+            kpis.append({"label": f"Total {field['name']}", "value": "—", "icon": "chart"})
+        elif field.get("semantic_role") in {"percentage_ratio_column"}:
+            kpis.append({"label": field["name"].replace("_", " ").title(), "value": "—", "icon": "metric"})
+    if not kpis:
+        if measures:
+            for m in measures[:2]:
+                kpis.append({"label": m["name"].replace("_", " ").title(), "value": "—", "icon": "metric"})
+        else:
+            kpis.append({"label": "Records", "value": f"{row_count:,}" if row_count else "—", "icon": "table"})
+    return kpis[:4]
+
+
 def render_storyboard_builder(client: BackendClient) -> None:
     st.header("Storyboard Builder")
     st.caption("Turn Dashboard Studio visuals into a Tableau-style business story for executive review.")
@@ -1531,6 +1552,11 @@ def render_storyboard_builder(client: BackendClient) -> None:
     if not visuals:
         st.info("If no visuals are added yet, go to Dashboard Studio and click Add to Storyboard.")
         return
+
+    try:
+        schema = client.get_visual_builder_schema(dataset_id)
+    except requests.RequestException:
+        schema = {}
 
     template = st.selectbox(
         "Storyboard template",
@@ -1588,22 +1614,28 @@ def render_storyboard_builder(client: BackendClient) -> None:
     with st.container(border=True):
         st.subheader(current.get("title", "Storyboard Slide"))
         st.caption(" | ".join(include_options) if include_options else "No sections selected")
+
+        storyboard_kpis = _build_storyboard_kpis(schema)
+        if layout_mode in {"KPI + Chart", "Full Storyboard"}:
+            kpi_cols = st.columns(min(len(storyboard_kpis), 4))
+            for col, kpi in zip(kpi_cols, storyboard_kpis):
+                col.metric(kpi["label"], kpi["value"])
+
         insight = current.get("short_ai_insight") or current.get("business_meaning", "")
         explanation = current.get("business_meaning") or "This slide summarizes the selected dashboard visual for business review."
         recommendation = current.get("why_useful") or "Use this slide to guide the next management discussion."
 
         spec = current.get("spec", {})
-        if layout_mode not in {"Summary only"} and spec.get("dimension"):
+        if layout_mode not in {"Summary only", "Table only"} and spec.get("dimension"):
             try:
                 visual = client.render_visual(dataset_id, spec)
                 chart = visual.get("chart", {})
                 plotly_spec = chart.get("plotly", {})
-                if layout_mode == "Table only":
-                    st.dataframe(pd.DataFrame([visual.get("applied_spec", {})]), use_container_width=True)
-                else:
-                    st.plotly_chart(go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {})), use_container_width=True)
+                st.plotly_chart(go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {})), use_container_width=True)
             except requests.RequestException as exc:
                 st.warning(f"Could not render storyboard visual: {exc}")
+        elif layout_mode == "Table only":
+            st.dataframe(pd.DataFrame([current.get("spec", {})]), use_container_width=True)
 
         if layout_mode in {"Visual + Summary", "Summary only", "KPI + Chart", "Full Storyboard"}:
             summary_cols = st.columns(3)
@@ -1613,16 +1645,20 @@ def render_storyboard_builder(client: BackendClient) -> None:
             summary_cols[1].write(explanation)
             summary_cols[2].markdown("**Recommendation**")
             summary_cols[2].write(recommendation)
+        st.caption(f"Page {st.session_state[slide_key] + 1} of {slide_count}")
 
 
 def render_location_insights(client: BackendClient) -> None:
     st.header("Location Insights")
     st.caption("Regional analysis and map-based geographic views in one place.")
+    dataset_id = select_dataset(client, key="location_insights_dataset_select")
+    if not dataset_id:
+        return
     regional_tab, map_tab = st.tabs(["Regional Analysis", "Map View"])
     with regional_tab:
-        render_regional_analytics(client)
+        render_regional_analytics(client, dataset_id=dataset_id)
     with map_tab:
-        render_geographic_insights(client)
+        render_geographic_insights(client, dataset_id=dataset_id)
 
 
 def main() -> None:
