@@ -123,6 +123,79 @@ def _measure_name(dax: str) -> str:
     return first_line.split("=", 1)[0].strip() or "Generated Measure"
 
 
+def _is_money_metric(metric: str | None) -> bool:
+    text = (metric or "").lower()
+    return any(term in text for term in ["revenue", "sales", "amount", "profit", "cost", "price", "value", "spend"])
+
+
+def _is_age_metric(metric: str | None) -> bool:
+    text = (metric or "").lower().replace("_", " ")
+    return text == "age" or text.endswith(" age") or " age " in f" {text} "
+
+
+def _prompt_requests_total(prompt: str) -> bool:
+    text = prompt.lower()
+    return any(term in text for term in ["total age", "sum age", "sum of age", "total of age"])
+
+
+def _should_average_metric(metric: str | None, prompt: str, dax: str = "") -> bool:
+    text = f"{prompt} {dax}".lower()
+    if _is_age_metric(metric) and not _prompt_requests_total(prompt):
+        return True
+    return any(term in text for term in ["average", "avg", "mean"])
+
+
+def _format_metadata(dax: str, metric: str | None) -> dict[str, str]:
+    text = dax.lower()
+    if "no dax required" in text:
+        return {
+            "metric_type": "Structural Analysis",
+            "data_type": "Text",
+            "display_format": "Text",
+            "power_bi_format_string": "",
+            "preview_value": "No DAX required",
+        }
+    if "rate" in text or "divide" in text or "percent" in text:
+        return {
+            "metric_type": "Percentage",
+            "data_type": "Decimal Number",
+            "display_format": "Percentage",
+            "power_bi_format_string": "0.00%",
+            "preview_value": "12.34%",
+        }
+    if "countrows" in text or re.search(r"\bcount\s*\(", text):
+        return {
+            "metric_type": "Count",
+            "data_type": "Whole Number",
+            "display_format": "Whole Number",
+            "power_bi_format_string": "#,##0",
+            "preview_value": "1,234",
+        }
+    if "average" in text or "avg" in text or _is_age_metric(metric):
+        return {
+            "metric_type": "Average",
+            "data_type": "Decimal Number",
+            "display_format": "Decimal Number",
+            "power_bi_format_string": "0.0" if _is_age_metric(metric) else "#,##0.00",
+            "preview_value": "42.5" if _is_age_metric(metric) else "1,234.50",
+        }
+    if _is_money_metric(metric):
+        return {
+            "metric_type": "Currency Total",
+            "data_type": "Decimal Number",
+            "display_format": "Currency",
+            "power_bi_format_string": "$#,##0.00",
+            "preview_value": "$1,234.50",
+        }
+    return {
+        "metric_type": "Numeric Total",
+        "data_type": "Decimal Number",
+        "display_format": "Decimal Number",
+        "power_bi_format_string": "#,##0.00",
+        "preview_value": "1,234.50",
+    }
+
+
 def _recommended_visuals(dax: str, domain: str, analysis_type: str = "KPI Tracking") -> list[str]:
     if analysis_type == "Trend Analysis":
         return ["Line Chart"]
@@ -149,25 +222,19 @@ def _recommended_visuals(dax: str, domain: str, analysis_type: str = "KPI Tracki
 
 def _measure_preview(dax: str, metric: str | None, domain: str) -> dict[str, Any]:
     name = _measure_name(dax)
-    text = dax.lower()
-    if "rate" in text or "divide" in text:
-        value_type = "percentage"
-        expected_format = "0.00%"
-    elif "average" in text or "avg" in text:
-        value_type = "average"
-        expected_format = "#,##0.00"
-    elif "countrows" in text:
-        value_type = "count"
-        expected_format = "#,##0"
-    else:
-        value_type = "numeric total"
-        expected_format = "#,##0.00"
+    metadata = _format_metadata(dax, metric)
     return {
         "measure_name": name,
         "metric": metric or "records",
         "domain": domain,
-        "value_type": value_type,
-        "expected_format": expected_format,
+        "value_type": metadata["metric_type"].lower(),
+        "expected_format": metadata["power_bi_format_string"],
+        "metric_type": metadata["metric_type"],
+        "data_type": metadata["data_type"],
+        "display_format": metadata["display_format"],
+        "power_bi_format_string": metadata["power_bi_format_string"],
+        "preview_value": metadata["preview_value"],
+        "recommended_visual": _best_visual(dax, domain),
         "preview_note": (
             f"{name} should be validated in Power BI against the uploaded dataset table and filtered by the report context."
         ),
@@ -391,7 +458,7 @@ def generate_dax(dataset_id: str, prompt: str) -> dict[str, Any]:
             f"    DATESINPERIOD('Date'[Date], MAX('Date'[Date]), -12, MONTH)\n"
             f")"
         )
-    elif "average" in q and metric:
+    elif _should_average_metric(metric, prompt):
         dax = f"Average {metric} =\nAVERAGE('{table}'[{metric}])"
     elif metric:
         dax = f"Total {metric} =\nSUM('{table}'[{metric}])"
@@ -486,6 +553,9 @@ def dax_library(dataset_id: str) -> dict[str, Any]:
         {"name": "Record Count", "dax": "Record Count =\nCOUNTROWS('Dataset')"},
     ]
     if metric:
+        if _is_age_metric(metric):
+            measures.append({"name": f"Average {metric}", "dax": f"Average {metric} =\nAVERAGE('Dataset'[{metric}])"})
+            return {"domain": domain, "measures": measures}
         measures.extend(
             [
                 {"name": f"Total {metric}", "dax": f"Total {metric} =\nSUM('Dataset'[{metric}])"},

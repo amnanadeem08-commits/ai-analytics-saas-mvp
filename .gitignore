@@ -11,8 +11,10 @@ data/processed/*
 data/datasets/
 data/test_runs/
 data/metadata/
+data/branding/*
 !data/uploads/.gitkeep
 !data/processed/.gitkeep
+!data/branding/.gitkeep
 *.log
 *.err.log
 *.pid

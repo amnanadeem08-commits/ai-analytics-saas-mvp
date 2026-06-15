@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+from datetime import date
 from urllib.parse import urlencode
 
 import pandas as pd
@@ -110,7 +111,7 @@ def render_branding_editor(client: BackendClient, branding: dict) -> None:
         logo_file = st.file_uploader("Logo", type=["png", "jpg", "jpeg", "webp", "svg"])
 
         col1, col2 = st.columns(2)
-        if col1.button("Save", width="stretch"):
+        if col1.button("Save", use_container_width=True):
             try:
                 client.update_branding(
                     {
@@ -126,7 +127,7 @@ def render_branding_editor(client: BackendClient, branding: dict) -> None:
                 st.rerun()
             except requests.RequestException as exc:
                 st.error(f"Could not save branding: {exc}")
-        if col2.button("Reset", width="stretch"):
+        if col2.button("Reset", use_container_width=True):
             try:
                 client.update_branding(
                     {
@@ -196,9 +197,9 @@ def render_dataset_overview(client: BackendClient) -> None:
         )
         summary_cols[3].metric("Duplicates", f"{overview.get('duplicate_rows', 0):,}")
         st.subheader("Column Schema")
-        st.dataframe(pd.DataFrame(overview.get("column_schema", [])), width="stretch")
+        st.dataframe(pd.DataFrame(overview.get("column_schema", [])), use_container_width=True)
         st.subheader("Preview")
-        st.dataframe(pd.DataFrame(preview["rows"]), width="stretch")
+        st.dataframe(pd.DataFrame(preview["rows"]), use_container_width=True)
     except requests.RequestException as exc:
         st.error(f"Could not load preview: {exc}")
 
@@ -223,6 +224,121 @@ def _build_filter_payload(schema: dict, key_prefix: str) -> dict:
             )
             if selected:
                 filters[column] = {"values": selected}
+    return filters
+
+
+def _format_active_filter(column: str, criteria: dict) -> str:
+    if criteria.get("values"):
+        return f"{column}: {', '.join(map(str, criteria['values']))}"
+    if criteria.get("min") is not None or criteria.get("max") is not None:
+        return f"{column}: {criteria.get('min', 'Any')} - {criteria.get('max', 'Any')}"
+    return column
+
+
+def _dashboard_studio_slicer_payload(schema: dict, dataset_id: str) -> dict:
+    filters: dict = {}
+    options = schema.get("filters", {})
+    recommendations = schema.get("slicer_recommendations", [])
+    recommended_fields = [item["field"] for item in recommendations if item.get("field") in options]
+    all_fields = list(options.keys())
+    state_prefix = f"dashboard_studio_{dataset_id}"
+    selected_key = f"{state_prefix}_slicer_fields"
+
+    if selected_key not in st.session_state:
+        st.session_state[selected_key] = recommended_fields[:4]
+
+    st.subheader("Slicers")
+    st.selectbox("Apply slicers to", ["All visuals"], index=0)
+    st.caption("Selected-visual-only filtering is planned for a later phase; Phase 3 applies slicers to all Dashboard Studio visuals.")
+
+    left, right = st.columns([3, 1])
+    selected_fields = left.multiselect(
+        "Choose slicer fields",
+        all_fields,
+        default=[field for field in st.session_state[selected_key] if field in all_fields],
+        key=f"{state_prefix}_slicer_field_picker",
+        help="Recommended slicers avoid high-cardinality ID columns by default, but you can manually choose any field.",
+    )
+    st.session_state[selected_key] = selected_fields
+    if right.button("Reset Filters", use_container_width=True):
+        for key in list(st.session_state.keys()):
+            if key.startswith(f"{state_prefix}_slicer_"):
+                del st.session_state[key]
+        st.session_state[selected_key] = recommended_fields[:4]
+        st.rerun()
+
+    if recommendations:
+        with st.expander("Recommended Slicer Fields", expanded=False):
+            rows = [
+                {
+                    "Field": item.get("field"),
+                    "Slicer Type": item.get("slicer_type"),
+                    "Semantic Role": item.get("semantic_role"),
+                    "Why Useful": item.get("reason"),
+                }
+                for item in recommendations
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    if not selected_fields:
+        st.info("No slicers selected. Add country, gender, category, segment, date, or numeric fields to filter visuals.")
+
+    for column in selected_fields:
+        cfg = options.get(column, {})
+        filter_type = cfg.get("type")
+        key_base = f"{state_prefix}_slicer_{column}"
+        if filter_type in {"categorical", "boolean"}:
+            values = cfg.get("values", [])
+            mode = st.radio(
+                f"{column} slicer type",
+                ["Multi-select", "Dropdown"],
+                horizontal=True,
+                key=f"{key_base}_mode",
+            )
+            if mode == "Dropdown":
+                selected_value = st.selectbox(f"Dropdown slicer: {column}", ["All"] + values, key=f"{key_base}_dropdown")
+                if selected_value != "All":
+                    filters[column] = {"values": [selected_value]}
+            else:
+                selected_values = st.multiselect(f"Multi-select slicer: {column}", values, key=f"{key_base}_multi")
+                if selected_values:
+                    filters[column] = {"values": selected_values}
+        elif filter_type == "date_range":
+            min_date = pd.to_datetime(cfg.get("min")).date() if cfg.get("min") else date.today()
+            max_date = pd.to_datetime(cfg.get("max")).date() if cfg.get("max") else min_date
+            selected_range = st.date_input(
+                f"Date range slicer: {column}",
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+                key=f"{key_base}_date_range",
+            )
+            if isinstance(selected_range, tuple) and len(selected_range) == 2:
+                start, end = selected_range
+                if start != min_date or end != max_date:
+                    filters[column] = {"min": start.isoformat(), "max": end.isoformat()}
+        elif filter_type == "numeric_range":
+            min_value = float(cfg.get("min", 0) or 0)
+            max_value = float(cfg.get("max", min_value) or min_value)
+            if min_value == max_value:
+                st.caption(f"{column} has one numeric value: {min_value:g}")
+                continue
+            selected_min, selected_max = st.slider(
+                f"Numeric range slicer: {column}",
+                min_value=min_value,
+                max_value=max_value,
+                value=(min_value, max_value),
+                key=f"{key_base}_numeric_range",
+            )
+            if selected_min != min_value or selected_max != max_value:
+                filters[column] = {"min": selected_min, "max": selected_max}
+
+    st.markdown("**Active Filters**")
+    if filters:
+        for column, criteria in filters.items():
+            st.caption(_format_active_filter(column, criteria))
+    else:
+        st.caption("No filters applied.")
     return filters
 
 
@@ -515,7 +631,7 @@ def _render_suggested_questions(dashboard: dict) -> None:
 def _render_dashboard_preview(preview_rows: list[dict]) -> None:
     with st.expander("Dataset preview", expanded=False):
         if preview_rows:
-            st.dataframe(pd.DataFrame(preview_rows), width="stretch")
+            st.dataframe(pd.DataFrame(preview_rows), use_container_width=True)
         else:
             st.info("No preview rows are available for this dataset.")
 
@@ -560,13 +676,13 @@ def render_dashboard(client: BackendClient) -> None:
         st.json(col_types)
         numeric_summary = summary.get("numeric_summary", {})
         if numeric_summary:
-            st.dataframe(pd.DataFrame(numeric_summary).T, width="stretch")
+            st.dataframe(pd.DataFrame(numeric_summary).T, use_container_width=True)
         missing_values = summary.get("missing_values_by_column", {})
         if missing_values:
             missing_df = pd.DataFrame(
                 [{"column": key, "missing_values": value} for key, value in missing_values.items()]
             )
-            st.dataframe(missing_df, width="stretch")
+            st.dataframe(missing_df, use_container_width=True)
 
     st.subheader("Visual Analysis")
     render_plotly_chart_specs(dashboard)
@@ -615,7 +731,7 @@ def render_ai_insights(client: BackendClient) -> None:
     root_causes = domain_payload.get("root_causes", [])
     if root_causes:
         with st.expander("Root Cause Engine", expanded=True):
-            st.dataframe(safe_table(root_causes), width="stretch")
+            st.dataframe(safe_table(root_causes), use_container_width=True)
 
     executive = insight_payload.get("executive_summary")
     if executive:
@@ -660,7 +776,8 @@ def render_ai_insights(client: BackendClient) -> None:
 
 
 def render_visual_builder(client: BackendClient) -> None:
-    st.header("Visual Builder")
+    st.header("Dashboard Studio")
+    st.caption("Build Power BI/Tableau-style visuals using semantic field roles, safer defaults, and business-friendly settings.")
     dataset_id = select_dataset(client)
     if not dataset_id:
         return
@@ -673,34 +790,113 @@ def render_visual_builder(client: BackendClient) -> None:
 
     dimensions = [field["name"] for field in schema.get("dimensions", [])]
     measures = [field["name"] for field in schema.get("measures", [])]
+    semantic_fields = {field["name"]: field for field in schema.get("semantic_layer", [])}
     defaults = schema.get("suggested_defaults", {})
+    storyboard_key = f"dashboard_studio_storyboard_{dataset_id}"
+    selected_spec_key = f"dashboard_studio_spec_{dataset_id}"
+    st.session_state.setdefault(storyboard_key, [])
 
     if not dimensions:
-        st.info("No dimension fields are available for visual builder.")
+        st.info("No business dimension fields are available for Dashboard Studio. Add category, region, date, product, or segment fields to build visuals.")
         return
 
-    filters = _build_filter_payload(schema, "visual_builder")
-    col1, col2, col3, col4 = st.columns(4)
-    dimension = col1.selectbox(
-        "Dimension",
-        dimensions,
-        index=dimensions.index(defaults.get("dimension")) if defaults.get("dimension") in dimensions else 0,
-    )
-    measure_options = ["Count"] + measures
-    default_measure = defaults.get("measure") if defaults.get("measure") in measures else "Count"
-    measure_label = col2.selectbox(
-        "Measure",
-        measure_options,
-        index=measure_options.index(default_measure) if default_measure in measure_options else 0,
-    )
-    chart_type = col3.selectbox("Chart", ["bar", "pie", "table"], index=0)
-    aggregation = col4.selectbox("Aggregation", ["sum", "mean", "count", "min", "max"], index=0)
+    toolbar = st.columns(6)
+    toolbar[0].button("Add KPI", use_container_width=True, disabled=True)
+    toolbar[1].button("Add Chart", type="primary", use_container_width=True)
+    toolbar[2].button("Add Table", use_container_width=True, disabled=True)
+    toolbar[3].button("Add Slicer", use_container_width=True, disabled=True)
+    toolbar[4].button("Add Insight", use_container_width=True, disabled=True)
+    toolbar[5].button("Add to Storyboard", use_container_width=True, disabled=True)
+    st.caption("Recommendations use semantic roles to suggest visuals that behave more like Power BI/Tableau, not a generic chart picker.")
+
+    recommended_visuals = schema.get("recommended_visuals", [])
+    if recommended_visuals:
+        st.subheader("Recommended Visuals")
+        for offset in range(0, min(len(recommended_visuals), 6), 3):
+            rec_cols = st.columns(3)
+            for col, recommendation in zip(rec_cols, recommended_visuals[offset : offset + 3]):
+                with col.container(border=True):
+                    st.markdown(f"**{recommendation.get('title', 'Recommended Visual')}**")
+                    st.caption(recommendation.get("business_meaning", ""))
+                    st.write(f"Chart: `{recommendation.get('suggested_chart_type', '')}`")
+                    fields_used = ", ".join(recommendation.get("fields_used", [])) or "Dataset records"
+                    st.write(f"Fields: {fields_used}")
+                    st.caption(recommendation.get("why_useful", ""))
+                    if recommendation.get("short_ai_insight"):
+                        st.info(recommendation["short_ai_insight"])
+                    action_cols = st.columns(2)
+                    if action_cols[0].button("Use this Visual", key=f"use_{recommendation.get('visual_id')}", use_container_width=True):
+                        st.session_state[selected_spec_key] = recommendation.get("spec", {})
+                        st.rerun()
+                    if action_cols[1].button("Add to Storyboard", key=f"story_{recommendation.get('visual_id')}", use_container_width=True):
+                        st.session_state[storyboard_key].append(recommendation)
+                        st.success("Added to storyboard for this session.")
+
+    filters = _dashboard_studio_slicer_payload(schema, dataset_id)
+    canvas, settings = st.columns([2.2, 1])
+    selected_spec = st.session_state.get(selected_spec_key, {})
+    with settings:
+        st.subheader("Visual Settings")
+        selected_dimension_default = selected_spec.get("dimension") or defaults.get("dimension")
+        dimension = st.selectbox(
+            "Dimension / Axis",
+            dimensions,
+            index=dimensions.index(selected_dimension_default) if selected_dimension_default in dimensions else 0,
+        )
+        measure_options = ["Count"] + measures
+        default_measure = selected_spec.get("measure") or (defaults.get("measure") if defaults.get("measure") in measures else "Count")
+        default_measure = default_measure if default_measure in measure_options else "Count"
+        measure_label = st.selectbox(
+            "Measure / Value",
+            measure_options,
+            index=measure_options.index(default_measure) if default_measure in measure_options else 0,
+        )
+        chart_options = ["bar", "horizontal_bar", "line", "pie", "table"]
+        default_chart = selected_spec.get("chart_type") or (defaults.get("chart_type") if defaults.get("chart_type") in chart_options else "bar")
+        chart_type = st.selectbox("Chart Type", chart_options, index=chart_options.index(default_chart))
+        aggregation_options = ["sum", "mean", "count", "min", "max"]
+        default_aggregation = selected_spec.get("aggregation") or defaults.get("aggregation", "sum")
+        aggregation = st.selectbox(
+            "Aggregation",
+            aggregation_options,
+            index=aggregation_options.index(default_aggregation) if default_aggregation in aggregation_options else 0,
+        )
+        sort_options = ["descending", "ascending", "none"]
+        default_sort = selected_spec.get("sort", "descending")
+        sort = st.selectbox("Sort", sort_options, index=sort_options.index(default_sort) if default_sort in sort_options else 0)
+        legend = st.selectbox("Legend", ["None"] + dimensions, index=0)
+        tooltip = st.selectbox("Tooltip", ["Auto"] + dimensions + measures, index=0)
+        number_formats = ["Auto", "Whole Number", "Decimal Number", "Currency", "Percentage"]
+        default_number_format = selected_spec.get("number_format", "Auto")
+        number_format = st.selectbox(
+            "Number Format",
+            number_formats,
+            index=number_formats.index(default_number_format) if default_number_format in number_formats else 0,
+        )
+        title = st.text_input("Title", value=selected_spec.get("title") or "")
+        data_labels = st.checkbox("Data Labels", value=bool(selected_spec.get("data_labels", True)))
+        selected_dimension_meta = semantic_fields.get(dimension, {})
+        selected_measure_meta = semantic_fields.get(measure_label, {}) if measure_label != "Count" else {}
+        if selected_dimension_meta.get("helper_message"):
+            st.warning(selected_dimension_meta["helper_message"])
+        if selected_measure_meta.get("helper_message"):
+            st.warning(selected_measure_meta["helper_message"])
+        st.caption(
+            f"Axis role: {selected_dimension_meta.get('semantic_role', 'unknown')} | "
+            f"Measure role: {selected_measure_meta.get('semantic_role', 'count') if measure_label != 'Count' else 'count'}"
+        )
 
     spec = {
         "chart_type": chart_type,
         "dimension": dimension,
         "measure": None if measure_label == "Count" else measure_label,
         "aggregation": aggregation,
+        "sort": sort,
+        "legend": None if legend == "None" else legend,
+        "tooltip": None if tooltip == "Auto" else tooltip,
+        "number_format": number_format,
+        "title": title.strip() or None,
+        "data_labels": data_labels,
         "filters": filters,
     }
 
@@ -710,13 +906,58 @@ def render_visual_builder(client: BackendClient) -> None:
         st.error(f"Could not render visual: {exc}")
         return
 
-    chart = visual.get("chart", {})
-    plotly_spec = chart.get("plotly", {})
-    fig = go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {}))
-    st.plotly_chart(fig, width="stretch")
+    for warning in visual.get("semantic_warnings", []):
+        st.warning(warning)
+
+    with canvas:
+        st.subheader("Dashboard Canvas")
+        chart = visual.get("chart", {})
+        plotly_spec = chart.get("plotly", {})
+        fig = go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {}))
+        with st.container(border=True):
+            st.markdown(f"**{chart.get('title', 'Dashboard Visual')}**")
+            st.caption(chart.get("metadata", {}).get("short_ai_insight", "Use this visual to compare business performance across the selected fields."))
+            filtered_rows = chart.get("metadata", {}).get("filtered_rows")
+            if filtered_rows == 0:
+                st.warning("No data matches the selected filters.")
+            else:
+                st.plotly_chart(fig, use_container_width=True)
+            card_cols = st.columns(3)
+            if card_cols[0].button("Add to Storyboard", key="add_current_visual_storyboard", use_container_width=True):
+                st.session_state[storyboard_key].append(
+                    {
+                        "title": chart.get("title", "Dashboard Visual"),
+                        "business_meaning": chart.get("metadata", {}).get("short_ai_insight", ""),
+                        "suggested_chart_type": visual.get("applied_spec", {}).get("chart_type", ""),
+                        "fields_used": chart.get("fields", []),
+                        "spec": visual.get("applied_spec", {}),
+                        "short_ai_insight": chart.get("metadata", {}).get("short_ai_insight", ""),
+                    }
+                )
+                st.success("Current visual added to storyboard for this session.")
+            card_cols[1].button("Export Visual", use_container_width=True, disabled=True)
+            card_cols[2].caption("Export uses report exports in this MVP phase.")
+        storyboard = st.session_state.get(storyboard_key, [])
+        if storyboard:
+            with st.expander(f"Storyboard ({len(storyboard)} visuals)", expanded=False):
+                for item in storyboard:
+                    st.write(f"**{item.get('title')}**")
+                    st.caption(item.get("business_meaning") or item.get("short_ai_insight", ""))
+        with st.expander("Semantic Layer"):
+            semantic_rows = [
+                {
+                    "Column": field.get("name"),
+                    "Role": field.get("semantic_role"),
+                    "Type": field.get("semantic_type"),
+                    "Unique Values": field.get("unique_count"),
+                    "Priority": field.get("business_priority"),
+                }
+                for field in schema.get("semantic_layer", [])
+            ]
+            st.dataframe(pd.DataFrame(semantic_rows), use_container_width=True, hide_index=True)
 
     with st.expander("Suggestions"):
-        st.dataframe(pd.DataFrame(visual.get("suggestions", [])), width="stretch")
+        st.dataframe(pd.DataFrame(visual.get("suggestions", [])), use_container_width=True)
 
 
 def render_export_downloads(
@@ -760,32 +1001,32 @@ def render_export_downloads(
     col1.link_button(
         f"{safe_prefix}JSON",
         export_url("json"),
-        width="stretch",
+        use_container_width=True,
     )
     col2.link_button(
         f"{safe_prefix}CSV",
         export_url("csv"),
-        width="stretch",
+        use_container_width=True,
     )
     col3.link_button(
         f"{safe_prefix}PDF",
         export_url("pdf"),
-        width="stretch",
+        use_container_width=True,
     )
     col4.link_button(
         f"{safe_prefix}PPTX",
         export_url("pptx"),
-        width="stretch",
+        use_container_width=True,
     )
     col5.link_button(
         f"{safe_prefix}Excel",
         export_url("xlsx"),
-        width="stretch",
+        use_container_width=True,
     )
     col6.link_button(
         f"{safe_prefix}PNG",
         export_url("png"),
-        width="stretch",
+        use_container_width=True,
     )
 
 
@@ -841,21 +1082,21 @@ def render_reports(client: BackendClient) -> None:
 
         tabs = st.tabs(["Action Framework", "Findings", "Risks", "Opportunities", "Recommendations", "Action Plan"])
         with tabs[0]:
-            st.dataframe(safe_table(executive.get("decision_framework", [])), width="stretch")
+            st.dataframe(safe_table(executive.get("decision_framework", [])), use_container_width=True)
         with tabs[1]:
-            st.dataframe(safe_table(executive.get("key_findings", [])), width="stretch")
+            st.dataframe(safe_table(executive.get("key_findings", [])), use_container_width=True)
         with tabs[2]:
             risks = executive.get("risks", [])
             if risks:
-                st.dataframe(safe_table(risks), width="stretch")
+                st.dataframe(safe_table(risks), use_container_width=True)
             else:
                 st.success("No material risks detected from the current evidence.")
         with tabs[3]:
-            st.dataframe(safe_table(executive.get("opportunities", [])), width="stretch")
+            st.dataframe(safe_table(executive.get("opportunities", [])), use_container_width=True)
         with tabs[4]:
-            st.dataframe(safe_table(executive.get("recommendations", [])), width="stretch")
+            st.dataframe(safe_table(executive.get("recommendations", [])), use_container_width=True)
         with tabs[5]:
-            st.dataframe(safe_table(executive.get("action_plan", [])), width="stretch")
+            st.dataframe(safe_table(executive.get("action_plan", [])), use_container_width=True)
 
     chart_specs = report.get("chart_specs", [])
     chart_labels = {f"{chart.get('title', chart.get('chart_id'))} ({chart.get('chart_type', 'chart')})": chart.get("chart_id") for chart in chart_specs}
@@ -915,19 +1156,19 @@ def render_sql_lab(client: BackendClient) -> None:
     with right:
         st.subheader("Templates")
         for template in templates:
-            if st.button(template["name"], key=f"template_{template['name']}", width="stretch"):
+            if st.button(template["name"], key=f"template_{template['name']}", use_container_width=True):
                 st.session_state["sql_lab_query"] = template["sql"]
                 st.rerun()
 
         st.subheader("History")
         for item in reversed(history.get("history", [])[-5:]):
-            if st.button(item["sql"][:48], key=f"history_{item.get('created_at')}", width="stretch"):
+            if st.button(item["sql"][:48], key=f"history_{item.get('created_at')}", use_container_width=True):
                 st.session_state["sql_lab_query"] = item["sql"]
                 st.rerun()
 
         st.subheader("Saved")
         for item in history.get("saved_queries", [])[-8:]:
-            if st.button(item["name"], key=f"saved_{item.get('created_at')}", width="stretch"):
+            if st.button(item["name"], key=f"saved_{item.get('created_at')}", use_container_width=True):
                 st.session_state["sql_lab_query"] = item["sql"]
                 st.rerun()
 
@@ -947,18 +1188,18 @@ def render_sql_lab(client: BackendClient) -> None:
         limit = st.slider("Preview limit", 10, 1000, 100, step=10)
         actions = st.columns(5)
 
-        if actions[0].button("Run", type="primary", width="stretch"):
+        if actions[0].button("Run", type="primary", use_container_width=True):
             try:
                 result = client.run_sql(dataset_id, sql, limit)
                 st.session_state["sql_lab_result"] = result
             except requests.RequestException as exc:
                 st.error(f"SQL failed: {exc}")
-        if actions[1].button("Explain", width="stretch"):
+        if actions[1].button("Explain", use_container_width=True):
             try:
                 st.info(client.explain_sql(sql).get("explanation", ""))
             except requests.RequestException as exc:
                 st.error(f"Could not explain SQL: {exc}")
-        if actions[2].button("Optimize", width="stretch"):
+        if actions[2].button("Optimize", use_container_width=True):
             try:
                 optimized = client.optimize_sql(sql)
                 st.session_state["sql_lab_query_pending"] = optimized["sql"]
@@ -968,13 +1209,13 @@ def render_sql_lab(client: BackendClient) -> None:
                 st.error(f"Could not optimize SQL: {exc}")
         if st.session_state.get("sql_lab_message"):
             st.info(st.session_state.pop("sql_lab_message"))
-        if actions[3].button("Detect Errors", width="stretch"):
+        if actions[3].button("Detect Errors", use_container_width=True):
             try:
                 checked = client.detect_sql_errors(sql)
                 st.success("No SQL safety issues detected.") if checked.get("valid") else st.error(checked.get("error", "Invalid SQL"))
             except requests.RequestException as exc:
                 st.error(f"Could not detect errors: {exc}")
-        if actions[4].button("Save", width="stretch"):
+        if actions[4].button("Save", use_container_width=True):
             try:
                 client.save_sql(dataset_id, f"Query {len(history.get('saved_queries', [])) + 1}", sql)
                 st.success("Query saved.")
@@ -985,7 +1226,7 @@ def render_sql_lab(client: BackendClient) -> None:
         if result:
             st.subheader("Result Preview")
             result_df = pd.DataFrame(result.get("rows", []))
-            st.dataframe(result_df, width="stretch")
+            st.dataframe(result_df, use_container_width=True)
             st.download_button(
                 "Export results CSV",
                 result_df.to_csv(index=False).encode("utf-8"),
@@ -1116,7 +1357,7 @@ def render_regional_analytics(client: BackendClient) -> None:
         col.metric(kpi.get("label", "Region"), kpi.get("region", ""), kpi.get("value", ""))
     if regional.get("regional_rows"):
         st.subheader("Regional Performance")
-        st.dataframe(pd.DataFrame(regional["regional_rows"]), width="stretch")
+        st.dataframe(pd.DataFrame(regional["regional_rows"]), use_container_width=True)
     st.subheader("Executive Regional Insights")
     for item in regional.get("regional_insights", []):
         with st.expander(item.get("title", "Regional Insight"), expanded=True):
@@ -1145,7 +1386,7 @@ def render_geographic_insights(client: BackendClient) -> None:
         return
     for chart in charts:
         fig = go.Figure(data=chart.get("plotly", {}).get("data", []), layout=chart.get("plotly", {}).get("layout", {}))
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def render_dax_studio(client: BackendClient) -> None:
@@ -1174,12 +1415,23 @@ def render_dax_studio(client: BackendClient) -> None:
 
         preview = package.get("measure_preview", {})
         if preview:
-            cols = st.columns(4)
-            cols[0].metric("Measure", preview.get("measure_name", ""))
-            cols[1].metric("Metric", preview.get("metric", ""))
-            cols[2].metric("Value Type", preview.get("value_type", ""))
-            cols[3].metric("Format", preview.get("expected_format", ""))
+            preview_value = preview.get("preview_value", "")
+            if preview_value:
+                st.metric("Preview", preview_value)
+            preview_row = {
+                "Measure Name": preview.get("measure_name", ""),
+                "Business Meaning": package.get("business_meaning") or package.get("pdf_ppt_business_interpretation", ""),
+                "Metric Type": preview.get("metric_type") or preview.get("value_type", ""),
+                "Data Type": preview.get("data_type", ""),
+                "Display Format": preview.get("display_format") or preview.get("expected_format", ""),
+                "Power BI Format String": "Open Advanced Format",
+                "Recommended Visual": preview.get("recommended_visual") or package.get("best_visual", ""),
+            }
+            st.dataframe(pd.DataFrame([preview_row]), use_container_width=True, hide_index=True)
             st.caption(preview.get("preview_note", ""))
+            with st.expander("Advanced Format"):
+                st.write("Raw Power BI format string")
+                st.code(preview.get("power_bi_format_string") or preview.get("expected_format", "") or "Not applicable")
 
         validation = package.get("data_logic_validation", {})
         if validation.get("invalid_reasons"):
@@ -1216,7 +1468,7 @@ def render_dax_studio(client: BackendClient) -> None:
         st.subheader("DAX Library")
         st.caption(f"Detected domain: {library.get('domain', 'Generic Analytics')}")
         for measure in library.get("measures", []):
-            if st.button(measure["name"], key=f"dax_{measure['name']}", width="stretch"):
+            if st.button(measure["name"], key=f"dax_{measure['name']}", use_container_width=True):
                 st.session_state["dax_formula"] = measure["dax"]
                 st.rerun()
 
@@ -1233,12 +1485,12 @@ def render_dax_studio(client: BackendClient) -> None:
                 st.error(f"Could not generate DAX: {exc}")
         dax = st.text_area("Power BI measure builder", key="dax_formula", height=220)
         actions = st.columns(3)
-        if actions[0].button("Explain", width="stretch"):
+        if actions[0].button("Explain", use_container_width=True):
             try:
                 st.info(client.explain_dax(dax).get("explanation", ""))
             except requests.RequestException as exc:
                 st.error(f"Could not explain DAX: {exc}")
-        if actions[1].button("Optimize", width="stretch"):
+        if actions[1].button("Optimize", use_container_width=True):
             try:
                 optimized = client.optimize_dax(dax, dataset_id)
                 st.session_state["dax_formula_pending"] = optimized["dax"]
@@ -1249,13 +1501,121 @@ def render_dax_studio(client: BackendClient) -> None:
                 st.error(f"Could not optimize DAX: {exc}")
         if st.session_state.get("dax_message"):
             st.info(st.session_state.pop("dax_message"))
-        if actions[2].button("Detect Errors", width="stretch"):
+        if actions[2].button("Detect Errors", use_container_width=True):
             try:
                 checked = client.detect_dax_errors(dax)
                 st.success("No DAX structure issues detected.") if checked.get("valid") else st.error(checked.get("error", "Invalid DAX"))
             except requests.RequestException as exc:
                 st.error(f"Could not detect DAX errors: {exc}")
         render_dax_package(st.session_state.get("dax_package", {}))
+
+
+def render_storyboard_builder(client: BackendClient) -> None:
+    st.header("Storyboard Builder")
+    st.caption("Turn Dashboard Studio visuals into a Tableau-style business story for executive review.")
+    dataset_id = select_dataset(client)
+    if not dataset_id:
+        return
+
+    storyboard_key = f"dashboard_studio_storyboard_{dataset_id}"
+    slide_key = f"storyboard_slide_{dataset_id}"
+    visuals = st.session_state.get(storyboard_key, [])
+
+    if not visuals:
+        st.info("If no visuals are added yet, go to Dashboard Studio and click Add to Storyboard.")
+        return
+
+    template = st.selectbox(
+        "Storyboard template",
+        [
+            "Executive Overview",
+            "Sales Performance Story",
+            "Customer Churn Story",
+            "Inventory Health Story",
+            "Financial Performance Story",
+            "Marketing Performance Story",
+            "General Business Review",
+        ],
+    )
+    layout_mode = st.selectbox(
+        "Slide layout",
+        ["Visual + Summary", "Visual only", "Table only", "Summary only", "KPI + Chart", "Full Storyboard"],
+    )
+    include_options = st.multiselect(
+        "Include sections",
+        [
+            "Executive Summary",
+            "KPI Overview",
+            "Trend Analysis",
+            "Category Comparison",
+            "Detailed Table",
+            "Recommendations",
+            "Risk Analysis",
+            "Opportunity Analysis",
+            "Location Insights",
+        ],
+        default=["Executive Summary", "KPI Overview", "Recommendations"],
+    )
+
+    slide_count = len(visuals)
+    st.session_state.setdefault(slide_key, 0)
+    st.session_state[slide_key] = min(st.session_state[slide_key], slide_count - 1)
+
+    nav_left, nav_mid, nav_right = st.columns([1, 2, 1])
+    if nav_left.button("Previous slide", use_container_width=True, disabled=st.session_state[slide_key] == 0):
+        st.session_state[slide_key] -= 1
+        st.rerun()
+    selected_slide = nav_mid.selectbox(
+        "Slide selector",
+        list(range(1, slide_count + 1)),
+        index=st.session_state[slide_key],
+    )
+    st.session_state[slide_key] = selected_slide - 1
+    if nav_right.button("Next slide", use_container_width=True, disabled=st.session_state[slide_key] >= slide_count - 1):
+        st.session_state[slide_key] += 1
+        st.rerun()
+
+    current = visuals[st.session_state[slide_key]]
+    st.caption(f"Slide {st.session_state[slide_key] + 1} of {slide_count} | {template}")
+
+    with st.container(border=True):
+        st.subheader(current.get("title", "Storyboard Slide"))
+        st.caption(" | ".join(include_options) if include_options else "No sections selected")
+        insight = current.get("short_ai_insight") or current.get("business_meaning", "")
+        explanation = current.get("business_meaning") or "This slide summarizes the selected dashboard visual for business review."
+        recommendation = current.get("why_useful") or "Use this slide to guide the next management discussion."
+
+        spec = current.get("spec", {})
+        if layout_mode not in {"Summary only"} and spec.get("dimension"):
+            try:
+                visual = client.render_visual(dataset_id, spec)
+                chart = visual.get("chart", {})
+                plotly_spec = chart.get("plotly", {})
+                if layout_mode == "Table only":
+                    st.dataframe(pd.DataFrame([visual.get("applied_spec", {})]), use_container_width=True)
+                else:
+                    st.plotly_chart(go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {})), use_container_width=True)
+            except requests.RequestException as exc:
+                st.warning(f"Could not render storyboard visual: {exc}")
+
+        if layout_mode in {"Visual + Summary", "Summary only", "KPI + Chart", "Full Storyboard"}:
+            summary_cols = st.columns(3)
+            summary_cols[0].markdown("**AI Insight**")
+            summary_cols[0].write(insight or "Insight will appear when more evidence is available.")
+            summary_cols[1].markdown("**Business Explanation**")
+            summary_cols[1].write(explanation)
+            summary_cols[2].markdown("**Recommendation**")
+            summary_cols[2].write(recommendation)
+
+
+def render_location_insights(client: BackendClient) -> None:
+    st.header("Location Insights")
+    st.caption("Regional analysis and map-based geographic views in one place.")
+    regional_tab, map_tab = st.tabs(["Regional Analysis", "Map View"])
+    with regional_tab:
+        render_regional_analytics(client)
+    with map_tab:
+        render_geographic_insights(client)
 
 
 def main() -> None:
@@ -1277,13 +1637,12 @@ def main() -> None:
             "Dataset Preview",
             "Stats Dashboard",
             "AI Insights",
-            "Visual Builder",
+            "Dashboard Studio",
             "Reports",
             "SQL Lab",
             "DAX Studio",
-            "Regional Analytics",
-            "Geographic Insights",
-            "Presentation Mode",
+            "Location Insights",
+            "Storyboard Builder",
         ],
     )
 
@@ -1295,7 +1654,7 @@ def main() -> None:
         render_dashboard(client)
     elif page == "AI Insights":
         render_ai_insights(client)
-    elif page == "Visual Builder":
+    elif page == "Dashboard Studio":
         render_visual_builder(client)
     elif page == "Reports":
         render_reports(client)
@@ -1303,13 +1662,12 @@ def main() -> None:
         render_sql_lab(client)
     elif page == "DAX Studio":
         render_dax_studio(client)
-    elif page == "Regional Analytics":
-        render_regional_analytics(client)
-    elif page == "Geographic Insights":
-        render_geographic_insights(client)
-    elif page == "Presentation Mode":
-        render_presentation_mode(client)
+    elif page == "Location Insights":
+        render_location_insights(client)
+    elif page == "Storyboard Builder":
+        render_storyboard_builder(client)
 
 
 if __name__ == "__main__":
     main()
+

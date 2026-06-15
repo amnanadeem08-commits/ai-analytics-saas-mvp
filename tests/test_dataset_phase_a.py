@@ -166,16 +166,33 @@ def test_upload_persists_dataset_record_and_status(monkeypatch):
         visual_schema_body = visual_schema.json()
         assert visual_schema_body["suggested_defaults"]["dimension"] == "region"
         assert visual_schema_body["suggested_defaults"]["measure"] == "sales"
+        semantic_roles = {field["name"]: field["semantic_role"] for field in visual_schema_body["semantic_layer"]}
+        assert semantic_roles["region"] == "geography_column"
+        assert semantic_roles["sales"] == "revenue_currency_column"
+        assert visual_schema_body["recommended_visuals"]
+        recommended_titles = {visual["title"] for visual in visual_schema_body["recommended_visuals"]}
+        assert "Total Sales" in recommended_titles
+        assert "Sales by Region" in recommended_titles
 
         visual = client.post(
             f"/visual-builder/{dataset_id}/render",
-            json={"chart_type": "bar", "dimension": "region", "measure": "sales", "aggregation": "sum"},
+            json={
+                "chart_type": "horizontal_bar",
+                "dimension": "region",
+                "measure": "sales",
+                "aggregation": "sum",
+                "sort": "descending",
+                "number_format": "Currency",
+                "data_labels": True,
+            },
         )
         assert visual.status_code == 200
         visual_body = visual.json()
-        assert visual_body["chart"]["chart_type"] == "bar"
+        assert visual_body["chart"]["chart_type"] == "horizontal_bar"
         assert visual_body["chart"]["plotly"]["data"]
         assert visual_body["applied_spec"]["dimension"] == "region"
+        assert visual_body["applied_spec"]["number_format"] == "Currency"
+        assert visual_body["chart"]["metadata"]["short_ai_insight"]
 
         report = client.get(f"/report/{dataset_id}")
         assert report.status_code == 200

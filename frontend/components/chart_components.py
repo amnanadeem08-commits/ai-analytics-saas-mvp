@@ -139,8 +139,9 @@ def render_plotly_chart_specs(dashboard: dict) -> None:
                 continue
             with col.container(border=True):
                 _render_chart_header(chart)
-                st.plotly_chart(fig, width="stretch", config=PLOTLY_CONFIG, key=_chart_key(chart, index))
+                st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG, key=_chart_key(chart, index))
                 metadata = chart.get("metadata", {})
                 if metadata.get("metric_suitability"):
                     suitability = metadata["metric_suitability"]
                     st.caption(f"Metric rule: {suitability.get('reason', '')}")
+
