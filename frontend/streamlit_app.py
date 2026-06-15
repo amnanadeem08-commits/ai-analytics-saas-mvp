@@ -1812,7 +1812,6 @@ def main() -> None:
     page = st.sidebar.radio(
         "Navigation",
         [
-            "Upload Data",
             "Dataset Preview",
             "Stats Dashboard",
             "AI Insights",
@@ -1825,9 +1824,7 @@ def main() -> None:
         ],
     )
 
-    if page == "Upload Data":
-        render_upload(client)
-    elif page == "Dataset Preview":
+    if page == "Dataset Preview":
         render_dataset_overview(client)
     elif page == "Stats Dashboard":
         render_dashboard(client)
