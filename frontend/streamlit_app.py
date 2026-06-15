@@ -58,7 +58,25 @@ def render_backend_status(client: BackendClient) -> None:
         st.sidebar.error("Backend not reachable. Start FastAPI first.")
 
 
+THEME_PRESETS = [
+    {"name": "executive_dark", "display_name": "Executive Dark", "palette": ["#1B2A4A", "#2D5F8A", "#3FA7D6", "#4CAF50", "#FF9800"], "description": "Best for executive dashboards and boardroom reports."},
+    {"name": "power_bi_professional", "display_name": "Power BI Professional", "palette": ["#118DFF", "#12239E", "#E66C37", "#6B5B95", "#00BFA5"], "description": "Optimised for Power BI-style dashboards and KPIs."},
+    {"name": "tableau_inspired", "display_name": "Tableau Inspired", "palette": ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#B07AA1"], "description": "Classic Tableau colour palette for presentation-ready views."},
+    {"name": "healthcare_executive", "display_name": "Healthcare Executive", "palette": ["#004B87", "#009CDE", "#7FBA00", "#BA0C2F", "#F5A623"], "description": "Professional palette for healthcare and clinical dashboards."},
+    {"name": "financial_intelligence", "display_name": "Financial Intelligence", "palette": ["#0D4C3B", "#1A7B5A", "#2DAF7A", "#F5C518", "#D32F2F"], "description": "Suitable for finance, risk, and investment reporting."},
+    {"name": "minimal_clean", "display_name": "Minimal Clean", "palette": ["#1A1A2E", "#16213E", "#0F3460", "#E94560", "#F5F5F5"], "description": "Clean and modern look for general business reporting."},
+    {"name": "boardroom_light", "display_name": "Boardroom Light", "palette": ["#F8F9FA", "#DEE2E6", "#ADB5BD", "#495057", "#212529"], "description": "Light-tone elegant palette for board presentations."},
+    {"name": "startup_modern", "display_name": "Startup Modern", "palette": ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7"], "description": "Vibrant modern palette for startup and innovation dashboards."},
+]
+
+def _render_palette_swatches(palette: list[str]) -> str:
+    """Render inline colour swatch HTML for a palette."""
+    swatches = "".join(f'<span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:{c};margin-right:3px;border:1px solid rgba(0,0,0,0.08)"></span>' for c in palette)
+    return swatches
+
+
 def render_theme_selector(client: BackendClient) -> None:
+    st.sidebar.markdown("#### Theme Gallery")
     try:
         payload = client.list_themes()
     except requests.RequestException:
@@ -67,22 +85,45 @@ def render_theme_selector(client: BackendClient) -> None:
     themes = payload.get("themes", [])
     if not themes:
         return
-    labels = {theme["display_name"]: theme["name"] for theme in themes}
+
+    theme_map = {t["name"]: t for t in themes}
     active_name = payload.get("active_theme")
-    active_label = next((label for label, name in labels.items() if name == active_name), list(labels)[0])
-    selected = st.sidebar.selectbox(
-        "Theme",
-        list(labels),
-        index=list(labels).index(active_label),
-    )
-    selected_name = labels[selected]
-    if selected_name != active_name:
-        try:
-            client.set_active_theme(selected_name)
-            st.cache_data.clear()
-            st.rerun()
-        except requests.RequestException as exc:
-            st.sidebar.error(f"Could not switch theme: {exc}")
+    preset_map = {p["name"]: p for p in THEME_PRESETS}
+
+    for preset in THEME_PRESETS:
+        theme_obj = theme_map.get(preset["name"])
+        if not theme_obj:
+            continue
+        swatches = _render_palette_swatches(preset["palette"])
+        is_active = preset["name"] == active_name
+        label = f"{'✓ ' if is_active else ''}{preset['display_name']}"
+        st.sidebar.markdown(
+            f"""
+            <div style="
+                padding:6px 8px;
+                margin:2px 0;
+                border-radius:6px;
+                border:1px solid {'#118DFF' if is_active else 'transparent'};
+                background:{'rgba(17,141,255,0.06)' if is_active else 'transparent'};
+                cursor:pointer;
+                font-size:0.85rem;
+            ">
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <span>{swatches}</span>
+                    <span style="font-weight:{600 if is_active else 400};">{preset['display_name']}</span>
+                </div>
+                <div style="font-size:0.7rem;color:#64748B;margin-top:2px;">{preset['description']}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.sidebar.button("Apply", key=f"theme_{preset['name']}", use_container_width=True, type="primary" if is_active else "secondary"):
+            try:
+                client.set_active_theme(preset["name"])
+                st.cache_data.clear()
+                st.rerun()
+            except requests.RequestException as exc:
+                st.sidebar.error(f"Could not switch theme: {exc}")
 
 
 def get_active_branding(client: BackendClient) -> dict:
@@ -802,20 +843,38 @@ def render_visual_builder(client: BackendClient) -> None:
     defaults = schema.get("suggested_defaults", {})
     storyboard_key = f"dashboard_studio_storyboard_{dataset_id}"
     selected_spec_key = f"dashboard_studio_spec_{dataset_id}"
+    builder_mode_key = f"dashboard_studio_builder_mode_{dataset_id}"
     st.session_state.setdefault(storyboard_key, [])
+    st.session_state.setdefault(builder_mode_key, "chart")
 
     if not dimensions:
         st.info("No business dimension fields are available for Dashboard Studio. Add category, region, date, product, or segment fields to build visuals.")
         return
 
+    # Active toolbar with builder mode switching
     toolbar = st.columns(6)
-    toolbar[0].button("Add KPI", use_container_width=True, disabled=True)
-    toolbar[1].button("Add Chart", type="primary", use_container_width=True)
-    toolbar[2].button("Add Table", use_container_width=True, disabled=True)
-    toolbar[3].button("Add Slicer", use_container_width=True, disabled=True)
-    toolbar[4].button("Add Insight", use_container_width=True, disabled=True)
-    toolbar[5].button("Add to Storyboard", use_container_width=True, disabled=True)
-    st.caption("Recommendations use semantic roles to suggest visuals that behave more like Power BI/Tableau, not a generic chart picker.")
+    if toolbar[0].button("Add KPI", use_container_width=True, type="primary" if st.session_state[builder_mode_key] == "kpi" else "secondary"):
+        st.session_state[builder_mode_key] = "kpi"
+        st.rerun()
+    if toolbar[1].button("Add Chart", use_container_width=True, type="primary" if st.session_state[builder_mode_key] == "chart" else "secondary"):
+        st.session_state[builder_mode_key] = "chart"
+        st.rerun()
+    if toolbar[2].button("Add Table", use_container_width=True, type="primary" if st.session_state[builder_mode_key] == "table" else "secondary"):
+        st.session_state[builder_mode_key] = "table"
+        st.rerun()
+    if toolbar[3].button("Add Slicer", use_container_width=True, type="primary" if st.session_state[builder_mode_key] == "slicer" else "secondary"):
+        st.session_state[builder_mode_key] = "slicer"
+        st.rerun()
+    if toolbar[4].button("Add Insight", use_container_width=True, type="primary" if st.session_state[builder_mode_key] == "insight" else "secondary"):
+        st.session_state[builder_mode_key] = "insight"
+        st.rerun()
+    has_spec = bool(st.session_state.get(selected_spec_key))
+    if toolbar[5].button("Add to Storyboard", use_container_width=True, disabled=not has_spec):
+        spec_item = st.session_state[selected_spec_key]
+        st.session_state[storyboard_key].append(spec_item)
+        st.success("Current visual added to storyboard for this session.")
+    if not has_spec:
+        st.caption("Create or select a visual before adding to Storyboard.")
 
     recommended_visuals = schema.get("recommended_visuals", [])
     if recommended_visuals:
@@ -835,11 +894,87 @@ def render_visual_builder(client: BackendClient) -> None:
                     action_cols = st.columns(2)
                     if action_cols[0].button("Use this Visual", key=f"use_{recommendation.get('visual_id')}", use_container_width=True):
                         st.session_state[selected_spec_key] = recommendation.get("spec", {})
+                        st.session_state[builder_mode_key] = recommendation.get("spec", {}).get("chart_type", "chart") if recommendation.get("spec", {}).get("chart_type") != "kpi" else "chart"
                         st.rerun()
                     if action_cols[1].button("Add to Storyboard", key=f"story_{recommendation.get('visual_id')}", use_container_width=True):
                         st.session_state[storyboard_key].append(recommendation)
                         st.success("Added to storyboard for this session.")
 
+    # Builder panels based on active mode
+    builder_mode = st.session_state[builder_mode_key]
+    if builder_mode == "kpi":
+        with st.container(border=True):
+            st.subheader("KPI Builder")
+            st.caption("Configure a headline KPI metric for the dashboard.")
+            kpi_measure = st.selectbox("KPI Metric", ["Count"] + measures, key=f"kpi_measure_{dataset_id}")
+            kpi_label = st.text_input("KPI Label", value=kpi_measure if kpi_measure != "Count" else "Total Records", key=f"kpi_label_{dataset_id}")
+            if st.button("Create KPI", key=f"create_kpi_{dataset_id}", use_container_width=True, type="primary"):
+                kpi_spec = {
+                    "chart_type": "table",
+                    "dimension": dimensions[0] if dimensions else None,
+                    "measure": None if kpi_measure == "Count" else kpi_measure,
+                    "aggregation": "count" if kpi_measure == "Count" else "sum",
+                    "sort": "descending",
+                    "title": kpi_label,
+                    "data_labels": True,
+                    "filters": {},
+                }
+                st.session_state[selected_spec_key] = kpi_spec
+                st.rerun()
+
+    elif builder_mode == "table":
+        with st.container(border=True):
+            st.subheader("Table / Matrix Builder")
+            st.caption("Configure a tabular view of your data.")
+            table_dim = st.selectbox("Rows", dimensions, key=f"table_dim_{dataset_id}")
+            table_meas = st.selectbox("Values", ["Count"] + measures, key=f"table_meas_{dataset_id}")
+            table_agg = st.selectbox("Aggregation", ["sum", "mean", "count", "min", "max"], key=f"table_agg_{dataset_id}")
+            if st.button("Create Table", key=f"create_table_{dataset_id}", use_container_width=True, type="primary"):
+                table_spec = {
+                    "chart_type": "table",
+                    "dimension": table_dim,
+                    "measure": None if table_meas == "Count" else table_meas,
+                    "aggregation": table_agg,
+                    "sort": "descending",
+                    "title": f"{table_meas or 'Count'} by {table_dim}",
+                    "data_labels": True,
+                    "filters": {},
+                }
+                st.session_state[selected_spec_key] = table_spec
+                st.rerun()
+
+    elif builder_mode == "slicer":
+        with st.container(border=True):
+            st.subheader("Slicer Builder")
+            st.caption("Add interactive filters to the dashboard canvas.")
+            st.info("Slicers are configured in the Slicers panel below. Select fields to filter by.")
+            slicer_fields = list(schema.get("filters", {}).keys())
+            if slicer_fields:
+                chosen = st.multiselect("Available filter fields", slicer_fields, key=f"slicer_fields_{dataset_id}")
+                if chosen:
+                    st.success(f"Slicers active for: {', '.join(chosen)}")
+            else:
+                st.info("No filter-eligible fields detected in the current dataset.")
+
+    elif builder_mode == "insight":
+        with st.container(border=True):
+            st.subheader("Insight Card Builder")
+            st.caption("Add an AI-generated insight card to the canvas.")
+            try:
+                insight_payload = client.get_insights(dataset_id)
+                insights = insight_payload.get("insights", [])
+                if insights:
+                    chosen_insight = st.selectbox("Select insight", [i.get("title", i.get("message", "")) for i in insights], key=f"insight_sel_{dataset_id}")
+                    if st.button("Add Insight to Canvas", key=f"add_insight_{dataset_id}", use_container_width=True, type="primary"):
+                        matched = next((i for i in insights if i.get("title", i.get("message", "")) == chosen_insight), insights[0])
+                        st.session_state[selected_spec_key] = {"insight": matched, "chart_type": "insight"}
+                        st.rerun()
+                else:
+                    st.info("No AI insights are available for the current dataset.")
+            except requests.RequestException:
+                st.info("Could not load insights for insight card builder.")
+
+    # Chart builder (always visible, active when builder_mode == "chart")
     filters = _dashboard_studio_slicer_payload(schema, dataset_id)
     canvas, settings = st.columns([2.2, 1])
     selected_spec = st.session_state.get(selected_spec_key, {})
@@ -908,64 +1043,65 @@ def render_visual_builder(client: BackendClient) -> None:
         "filters": filters,
     }
 
-    try:
-        visual = client.render_visual(dataset_id, spec)
-    except requests.RequestException as exc:
-        st.error(f"Could not render visual: {exc}")
-        return
+    if builder_mode == "chart" or spec.get("chart_type") not in {"insight"}:
+        try:
+            visual = client.render_visual(dataset_id, spec)
+        except requests.RequestException as exc:
+            st.error(f"Could not render visual: {exc}")
+            return
 
-    for warning in visual.get("semantic_warnings", []):
-        st.warning(warning)
+        for warning in visual.get("semantic_warnings", []):
+            st.warning(warning)
 
-    with canvas:
-        st.subheader("Dashboard Canvas")
-        chart = visual.get("chart", {})
-        plotly_spec = chart.get("plotly", {})
-        fig = go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {}))
-        with st.container(border=True):
-            st.markdown(f"**{chart.get('title', 'Dashboard Visual')}**")
-            st.caption(chart.get("metadata", {}).get("short_ai_insight", "Use this visual to compare business performance across the selected fields."))
-            filtered_rows = chart.get("metadata", {}).get("filtered_rows")
-            if filtered_rows == 0:
-                st.warning("No data matches the selected filters.")
-            else:
-                st.plotly_chart(fig, use_container_width=True)
-            card_cols = st.columns(3)
-            if card_cols[0].button("Add to Storyboard", key="add_current_visual_storyboard", use_container_width=True):
-                st.session_state[storyboard_key].append(
+        with canvas:
+            st.subheader("Dashboard Canvas")
+            chart = visual.get("chart", {})
+            plotly_spec = chart.get("plotly", {})
+            fig = go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {}))
+            with st.container(border=True):
+                st.markdown(f"**{chart.get('title', 'Dashboard Visual')}**")
+                st.caption(chart.get("metadata", {}).get("short_ai_insight", "Use this visual to compare business performance across the selected fields."))
+                filtered_rows = chart.get("metadata", {}).get("filtered_rows")
+                if filtered_rows == 0:
+                    st.warning("No data matches the selected filters.")
+                else:
+                    st.plotly_chart(fig, use_container_width=True)
+                card_cols = st.columns(3)
+                if card_cols[0].button("Add to Storyboard", key="add_current_visual_storyboard", use_container_width=True):
+                    st.session_state[storyboard_key].append(
+                        {
+                            "title": chart.get("title", "Dashboard Visual"),
+                            "business_meaning": chart.get("metadata", {}).get("short_ai_insight", ""),
+                            "suggested_chart_type": visual.get("applied_spec", {}).get("chart_type", ""),
+                            "fields_used": chart.get("fields", []),
+                            "spec": visual.get("applied_spec", {}),
+                            "short_ai_insight": chart.get("metadata", {}).get("short_ai_insight", ""),
+                        }
+                    )
+                    st.success("Current visual added to storyboard for this session.")
+                card_cols[1].button("Export Visual", use_container_width=True, disabled=True)
+                card_cols[2].caption("Export uses report exports in this MVP phase.")
+            storyboard = st.session_state.get(storyboard_key, [])
+            if storyboard:
+                with st.expander(f"Storyboard ({len(storyboard)} visuals)", expanded=False):
+                    for item in storyboard:
+                        st.write(f"**{item.get('title')}**")
+                        st.caption(item.get("business_meaning") or item.get("short_ai_insight", ""))
+            with st.expander("Semantic Layer"):
+                semantic_rows = [
                     {
-                        "title": chart.get("title", "Dashboard Visual"),
-                        "business_meaning": chart.get("metadata", {}).get("short_ai_insight", ""),
-                        "suggested_chart_type": visual.get("applied_spec", {}).get("chart_type", ""),
-                        "fields_used": chart.get("fields", []),
-                        "spec": visual.get("applied_spec", {}),
-                        "short_ai_insight": chart.get("metadata", {}).get("short_ai_insight", ""),
+                        "Column": field.get("name"),
+                        "Role": field.get("semantic_role"),
+                        "Type": field.get("semantic_type"),
+                        "Unique Values": field.get("unique_count"),
+                        "Priority": field.get("business_priority"),
                     }
-                )
-                st.success("Current visual added to storyboard for this session.")
-            card_cols[1].button("Export Visual", use_container_width=True, disabled=True)
-            card_cols[2].caption("Export uses report exports in this MVP phase.")
-        storyboard = st.session_state.get(storyboard_key, [])
-        if storyboard:
-            with st.expander(f"Storyboard ({len(storyboard)} visuals)", expanded=False):
-                for item in storyboard:
-                    st.write(f"**{item.get('title')}**")
-                    st.caption(item.get("business_meaning") or item.get("short_ai_insight", ""))
-        with st.expander("Semantic Layer"):
-            semantic_rows = [
-                {
-                    "Column": field.get("name"),
-                    "Role": field.get("semantic_role"),
-                    "Type": field.get("semantic_type"),
-                    "Unique Values": field.get("unique_count"),
-                    "Priority": field.get("business_priority"),
-                }
-                for field in schema.get("semantic_layer", [])
-            ]
-            st.dataframe(pd.DataFrame(semantic_rows), use_container_width=True, hide_index=True)
+                    for field in schema.get("semantic_layer", [])
+                ]
+                st.dataframe(pd.DataFrame(semantic_rows), use_container_width=True, hide_index=True)
 
-    with st.expander("Suggestions"):
-        st.dataframe(pd.DataFrame(visual.get("suggestions", [])), use_container_width=True)
+        with st.expander("Suggestions"):
+            st.dataframe(pd.DataFrame(visual.get("suggestions", [])), use_container_width=True)
 
 
 def render_export_downloads(
