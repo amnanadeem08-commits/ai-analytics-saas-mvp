@@ -6,6 +6,8 @@ from pydantic import BaseModel
 class BrandingUpdate(BaseModel):
     company_name: str | None = None
     report_title: str | None = None
+    report_subtitle: str | None = None
+    footer_note: str | None = None
     logo_url: str | None = None
     primary_color: str | None = None
     secondary_color: str | None = None
@@ -16,6 +18,8 @@ class BrandingUpdate(BaseModel):
 class BrandingResponse(BaseModel):
     company_name: str
     report_title: str
+    report_subtitle: str = ""
+    footer_note: str = ""
     logo_url: str = ""
     logo_path: str = ""
     primary_color: str

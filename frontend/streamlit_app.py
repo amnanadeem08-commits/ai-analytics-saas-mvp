@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 import sys
 
@@ -25,7 +26,6 @@ from frontend.components.chart_components import (
 )
 from frontend.components.insight_cards import render_insight
 from frontend.components.metric_cards import render_summary_metrics
-from frontend.components.upload_component import render_upload
 
 
 st.set_page_config(page_title="AI Analytics SaaS MVP", layout="wide")
@@ -55,19 +55,45 @@ def render_backend_status(client: BackendClient) -> None:
         health = client.health()
         st.sidebar.success(f"Backend connected: {health.get('version', '')}")
     except requests.RequestException:
-        st.sidebar.error("Backend not reachable. Start FastAPI first.")
+        st.sidebar.warning("Backend offline. Local CSV preview still works.")
 
 
 THEME_PRESETS = [
-    {"name": "executive_dark", "display_name": "Executive Dark", "palette": ["#1B2A4A", "#2D5F8A", "#3FA7D6", "#4CAF50", "#FF9800"], "description": "Best for executive dashboards and boardroom reports."},
-    {"name": "power_bi_professional", "display_name": "Power BI Professional", "palette": ["#118DFF", "#12239E", "#E66C37", "#6B5B95", "#00BFA5"], "description": "Optimised for Power BI-style dashboards and KPIs."},
-    {"name": "tableau_inspired", "display_name": "Tableau Inspired", "palette": ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#B07AA1"], "description": "Classic Tableau colour palette for presentation-ready views."},
-    {"name": "healthcare_executive", "display_name": "Healthcare Executive", "palette": ["#004B87", "#009CDE", "#7FBA00", "#BA0C2F", "#F5A623"], "description": "Professional palette for healthcare and clinical dashboards."},
-    {"name": "financial_intelligence", "display_name": "Financial Intelligence", "palette": ["#0D4C3B", "#1A7B5A", "#2DAF7A", "#F5C518", "#D32F2F"], "description": "Suitable for finance, risk, and investment reporting."},
-    {"name": "minimal_clean", "display_name": "Minimal Clean", "palette": ["#1A1A2E", "#16213E", "#0F3460", "#E94560", "#F5F5F5"], "description": "Clean and modern look for general business reporting."},
-    {"name": "boardroom_light", "display_name": "Boardroom Light", "palette": ["#F8F9FA", "#DEE2E6", "#ADB5BD", "#495057", "#212529"], "description": "Light-tone elegant palette for board presentations."},
-    {"name": "startup_modern", "display_name": "Startup Modern", "palette": ["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4", "#FFEAA7"], "description": "Vibrant modern palette for startup and innovation dashboards."},
+    {"name": "power_bi_professional", "display_name": "Executive Blue", "background": "#F5F7FA", "palette": ["#0078D4", "#004E8C", "#00B7C3", "#F2C811", "#107C10"], "description": "Power BI-style blue palette for executive KPI dashboards."},
+    {"name": "financial_intelligence", "display_name": "Emerald Finance", "background": "#07130D", "palette": ["#22C55E", "#16A34A", "#84CC16", "#38BDF8", "#FACC15"], "description": "Finance-ready greens with high-contrast chart accents."},
+    {"name": "startup_modern", "display_name": "Purple Modern", "background": "#F8FAFF", "palette": ["#2563EB", "#7C3AED", "#06B6D4", "#10B981", "#F97316"], "description": "Modern pitch-deck palette with purple and blue accents."},
+    {"name": "boardroom_dark", "display_name": "Dark Corporate", "background": "#05070B", "palette": ["#60A5FA", "#A78BFA", "#34D399", "#FBBF24", "#F87171"], "description": "Dark boardroom theme for presentation and wall displays."},
+    {"name": "minimal_clean", "display_name": "Minimal Gray", "background": "#FAFAFA", "palette": ["#27272A", "#52525B", "#71717A", "#0EA5E9", "#16A34A"], "description": "Clean neutral palette for lightweight business reports."},
 ]
+
+DEFAULT_BRANDING = {
+    "company_name": "AI Analytics",
+    "report_title": "Executive Decision Intelligence Report",
+    "report_subtitle": "Upload a dataset to generate board-ready KPIs, charts, and insights.",
+    "footer_note": "",
+    "logo_url": "",
+    "primary_color": "#118DFF",
+    "secondary_color": "#12239E",
+    "accent_color": "#E66C37",
+    "theme_name": "power_bi_professional",
+}
+
+
+def initialize_session_state(initial_branding: dict | None = None) -> None:
+    """Keep app state stable across navigation, uploads, and theme changes."""
+    branding = {**DEFAULT_BRANDING, **(initial_branding or {})}
+    st.session_state.setdefault("uploaded_datasets", {})
+    st.session_state.setdefault("active_dataset_id", st.session_state.get("selected_dataset_id"))
+    st.session_state.setdefault("active_dataframe", None)
+    st.session_state.setdefault("selected_theme", branding.get("theme_name", "power_bi_professional"))
+    st.session_state.setdefault("branding", branding)
+    st.session_state.setdefault("primary_color", branding.get("primary_color", "#118DFF"))
+    st.session_state.setdefault("secondary_color", branding.get("secondary_color", "#12239E"))
+    st.session_state.setdefault("background_color", "#F5F7FA")
+    st.session_state.setdefault("chart_palette", ["#0078D4", "#004E8C", "#00B7C3", "#F2C811", "#107C10"])
+
+    if st.session_state.get("active_dataset_id") and not st.session_state.get("selected_dataset_id"):
+        st.session_state["selected_dataset_id"] = st.session_state["active_dataset_id"]
 
 def _render_palette_swatches(palette: list[str]) -> str:
     """Render inline colour swatch HTML for a palette."""
@@ -77,26 +103,17 @@ def _render_palette_swatches(palette: list[str]) -> str:
 
 def render_theme_selector(client: BackendClient) -> None:
     st.sidebar.markdown("#### Theme Gallery")
+    payload: dict = {"active_theme": None, "themes": []}
     try:
         payload = client.list_themes()
     except requests.RequestException:
-        return
+        st.sidebar.caption("Start the backend to apply saved theme presets.")
 
-    themes = payload.get("themes", [])
-    if not themes:
-        return
-
-    theme_map = {t["name"]: t for t in themes}
-    active_name = payload.get("active_theme")
-    preset_map = {p["name"]: p for p in THEME_PRESETS}
+    active_name = st.session_state.get("selected_theme") or payload.get("active_theme")
 
     for preset in THEME_PRESETS:
-        theme_obj = theme_map.get(preset["name"])
-        if not theme_obj:
-            continue
         swatches = _render_palette_swatches(preset["palette"])
         is_active = preset["name"] == active_name
-        label = f"{'✓ ' if is_active else ''}{preset['display_name']}"
         st.sidebar.markdown(
             f"""
             <div style="
@@ -118,12 +135,47 @@ def render_theme_selector(client: BackendClient) -> None:
             unsafe_allow_html=True,
         )
         if st.sidebar.button("Apply", key=f"theme_{preset['name']}", use_container_width=True, type="primary" if is_active else "secondary"):
+            st.session_state["selected_theme"] = preset["name"]
+            st.session_state["primary_color"] = preset["palette"][0]
+            st.session_state["secondary_color"] = preset["palette"][1]
+            st.session_state["background_color"] = preset["background"]
+            st.session_state["chart_palette"] = preset["palette"]
+            current_branding = {**st.session_state.get("branding", DEFAULT_BRANDING)}
+            current_branding.update(
+                {
+                    "primary_color": preset["palette"][0],
+                    "secondary_color": preset["palette"][1],
+                    "accent_color": preset["palette"][2],
+                    "theme_name": preset["name"],
+                }
+            )
+            st.session_state["branding"] = current_branding
             try:
-                client.set_active_theme(preset["name"])
-                st.cache_data.clear()
-                st.rerun()
+                applied_theme = client.set_active_theme(preset["name"])
+                st.session_state["primary_color"] = applied_theme.get("primary", preset["palette"][0])
+                st.session_state["secondary_color"] = applied_theme.get("secondary", preset["palette"][1])
+                st.session_state["background_color"] = applied_theme.get("background", preset["background"])
+                st.session_state["chart_palette"] = applied_theme.get("palette", preset["palette"])
+                current_branding.update(
+                    {
+                        "primary_color": st.session_state["primary_color"],
+                        "secondary_color": st.session_state["secondary_color"],
+                        "accent_color": applied_theme.get("accent", preset["palette"][2]),
+                        "theme_name": preset["name"],
+                    }
+                )
+                st.session_state["branding"] = current_branding
+                client.update_branding(
+                    {
+                        "primary_color": current_branding["primary_color"],
+                        "secondary_color": current_branding["secondary_color"],
+                        "accent_color": current_branding["accent_color"],
+                        "theme_name": preset["name"],
+                    }
+                )
             except requests.RequestException as exc:
                 st.sidebar.error(f"Could not switch theme: {exc}")
+            st.rerun()
 
 
 def get_active_branding(client: BackendClient) -> dict:
@@ -133,6 +185,8 @@ def get_active_branding(client: BackendClient) -> dict:
         return {
             "company_name": "AI Analytics",
             "report_title": "Executive Decision Intelligence Report",
+            "report_subtitle": "Upload a dataset to generate board-ready KPIs, charts, and insights.",
+            "footer_note": "",
             "logo_url": "",
             "primary_color": "#118DFF",
             "secondary_color": "#12239E",
@@ -153,52 +207,70 @@ def render_branding_editor(client: BackendClient, branding: dict) -> None:
             "Report title",
             value=branding.get("report_title", "Executive Decision Intelligence Report"),
         )
-        logo_file = st.file_uploader("Upload Company Logo", type=["png", "jpg", "jpeg", "webp", "svg"])
-        with st.expander("Advanced Color Settings", expanded=False):
-            primary_color = st.color_picker("Primary", value=branding.get("primary_color", "#118DFF"))
-            secondary_color = st.color_picker("Secondary", value=branding.get("secondary_color", "#12239E"))
-            accent_color = st.color_picker("Accent", value=branding.get("accent_color", "#E66C37"))
+        report_subtitle = st.text_input(
+            "Subtitle",
+            value=branding.get("report_subtitle", "Upload a dataset to generate board-ready KPIs, charts, and insights."),
+        )
+        footer_note = st.text_area(
+            "Footer / brand note",
+            value=branding.get("footer_note", ""),
+            height=80,
+        )
+        logo_file = st.file_uploader("Upload Company Logo", type=["png", "jpg", "jpeg", "webp", "svg"], key="branding_logo_upload")
+        primary_color = branding.get("primary_color", "#118DFF")
+        secondary_color = branding.get("secondary_color", "#12239E")
+        accent_color = branding.get("accent_color", "#E66C37")
+        st.caption("Theme preset colors are managed from Theme Gallery.")
 
         col1, col2 = st.columns(2)
-        if col1.button("Save", use_container_width=True):
+        if col1.button("Save", use_container_width=True, key="branding_save_button"):
+            branding_payload = {
+                "company_name": company_name,
+                "report_title": report_title,
+                "report_subtitle": report_subtitle,
+                "footer_note": footer_note,
+                "primary_color": primary_color,
+                "secondary_color": secondary_color,
+                "accent_color": accent_color,
+            }
+            st.session_state["branding"] = {**st.session_state.get("branding", DEFAULT_BRANDING), **branding_payload}
             try:
-                client.update_branding(
-                    {
-                        "company_name": company_name,
-                        "report_title": report_title,
-                        "primary_color": primary_color,
-                        "secondary_color": secondary_color,
-                        "accent_color": accent_color,
-                    }
-                )
+                client.update_branding(branding_payload)
                 if logo_file is not None:
-                    client.upload_logo(logo_file)
+                    st.session_state["branding"] = client.upload_logo(logo_file)
                 st.rerun()
             except requests.RequestException as exc:
-                st.error(f"Could not save branding: {exc}")
-        if col2.button("Reset", use_container_width=True):
+                st.warning(f"Could not save branding right now: {exc}")
+        if col2.button("Reset", use_container_width=True, key="branding_reset_button"):
+            reset_payload = {
+                "company_name": "AI Analytics",
+                "report_title": "Executive Decision Intelligence Report",
+                "report_subtitle": "Upload a dataset to generate board-ready KPIs, charts, and insights.",
+                "footer_note": "",
+                "logo_url": "",
+                "primary_color": "#118DFF",
+                "secondary_color": "#12239E",
+                "accent_color": "#E66C37",
+                "theme_name": "power_bi_professional",
+            }
+            st.session_state["branding"] = {**DEFAULT_BRANDING, **reset_payload}
             try:
-                client.update_branding(
-                    {
-                        "company_name": "AI Analytics",
-                        "report_title": "Executive Decision Intelligence Report",
-                        "logo_url": "",
-                        "primary_color": "#118DFF",
-                        "secondary_color": "#12239E",
-                        "accent_color": "#E66C37",
-                        "theme_name": "power_bi_professional",
-                    }
-                )
+                client.update_branding(reset_payload)
                 st.rerun()
             except requests.RequestException as exc:
-                st.error(f"Could not reset branding: {exc}")
+                st.warning(f"Could not reset branding right now: {exc}")
 
 
 def get_dataset_options(client: BackendClient) -> list[dict]:
     try:
-        return client.list_datasets()
+        datasets = client.list_datasets()
     except requests.RequestException:
-        return []
+        datasets = []
+    for item in datasets:
+        dataset_id = item.get("dataset_id")
+        if dataset_id:
+            st.session_state["uploaded_datasets"].setdefault(dataset_id, item)
+    return datasets
 
 
 def select_dataset(client: BackendClient, key: str | None = None) -> str | None:
@@ -213,7 +285,7 @@ def select_dataset(client: BackendClient, key: str | None = None) -> str | None:
     }
 
     default_label = None
-    selected_id = st.session_state.get("selected_dataset_id")
+    selected_id = st.session_state.get("active_dataset_id") or st.session_state.get("selected_dataset_id")
     for label, dataset_id in labels.items():
         if dataset_id == selected_id:
             default_label = label
@@ -223,14 +295,215 @@ def select_dataset(client: BackendClient, key: str | None = None) -> str | None:
     index = label_list.index(default_label) if default_label in label_list else 0
     selected_label = st.selectbox("Select dataset", label_list, index=index, key=key or "select_dataset_default")
     dataset_id = labels[selected_label]
+    st.session_state["active_dataset_id"] = dataset_id
     st.session_state["selected_dataset_id"] = dataset_id
     return dataset_id
 
 
+def _read_uploaded_dataframe(uploaded_file) -> pd.DataFrame:
+    suffix = Path(uploaded_file.name).suffix.lower()
+    content = uploaded_file.getvalue()
+    buffer = io.BytesIO(content)
+    if suffix in {".xlsx", ".xlsm"}:
+        try:
+            return pd.read_excel(buffer)
+        except Exception:
+            # Some exports are CSV data with an Excel-like extension.
+            buffer.seek(0)
+            return pd.read_csv(buffer)
+
+    for encoding in ("utf-8", "utf-8-sig", "latin1"):
+        try:
+            return pd.read_csv(io.BytesIO(content), encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+    return pd.read_csv(io.BytesIO(content))
+
+
+def _local_summary(df: pd.DataFrame) -> dict:
+    missing = int(df.isna().sum().sum())
+    return {
+        "row_count": int(len(df)),
+        "column_count": int(len(df.columns)),
+        "total_missing_values": missing,
+        "duplicate_rows": int(df.duplicated().sum()),
+        "column_types": {column: str(dtype) for column, dtype in df.dtypes.items()},
+        "missing_values_by_column": df.isna().sum().astype(int).to_dict(),
+    }
+
+
+def _render_local_kpis(df: pd.DataFrame, numeric_columns: list[str]) -> None:
+    st.subheader("Dashboard Cards")
+    if not numeric_columns:
+        cols = st.columns(3)
+        cols[0].metric("Rows", f"{len(df):,}")
+        cols[1].metric("Columns", f"{len(df.columns):,}")
+        cols[2].metric("Duplicates", f"{df.duplicated().sum():,}")
+        return
+
+    default_kpis = numeric_columns[: min(4, len(numeric_columns))]
+    selected_kpis = st.multiselect("Select KPI columns", numeric_columns, default=default_kpis, key="local_kpi_columns")
+    if not selected_kpis:
+        st.info("Select one or more numeric columns to show KPI cards.")
+        return
+
+    cols = st.columns(min(4, len(selected_kpis)))
+    for col, column in zip(cols, selected_kpis):
+        series = pd.to_numeric(df[column], errors="coerce")
+        col.metric(column, f"{series.sum():,.2f}", f"Avg {series.mean():,.2f}")
+
+
+def _render_local_chart_builder(df: pd.DataFrame, palette: list[str]) -> None:
+    st.subheader("Chart Preview")
+    if df.empty:
+        st.info("The uploaded dataset has no rows to chart.")
+        return
+
+    numeric_columns = df.select_dtypes(include="number").columns.tolist()
+    columns = df.columns.tolist()
+    if not columns:
+        st.info("The uploaded dataset has no columns to chart.")
+        return
+
+    settings, canvas = st.columns([1, 2])
+    with settings:
+        chart_type = st.selectbox("Chart type", ["Bar", "Line", "Scatter", "Pie", "Table"], key="local_chart_type")
+        x_axis = st.selectbox("X-axis", columns, key="local_x_axis")
+        y_options = ["Record Count"] + numeric_columns
+        y_axis = st.selectbox("Y-axis", y_options, key="local_y_axis")
+        aggregation = st.selectbox("Aggregation", ["sum", "mean", "count", "min", "max"], key="local_chart_aggregation")
+
+    if y_axis == "Record Count":
+        grouped = df.groupby(x_axis, dropna=False).size().reset_index(name="Record Count")
+        value_column = "Record Count"
+    else:
+        grouped = (
+            df.groupby(x_axis, dropna=False)[y_axis]
+            .agg(aggregation)
+            .reset_index()
+            .rename(columns={y_axis: f"{aggregation.title()} {y_axis}"})
+        )
+        value_column = f"{aggregation.title()} {y_axis}"
+
+    grouped[x_axis] = grouped[x_axis].astype(str)
+    grouped = grouped.sort_values(value_column, ascending=False).head(50)
+
+    with canvas:
+        if chart_type == "Table":
+            st.dataframe(grouped, use_container_width=True, hide_index=True)
+            return
+
+        title = f"{value_column} by {x_axis}"
+        if chart_type == "Pie":
+            fig = go.Figure(
+                data=[
+                    go.Pie(
+                        labels=grouped[x_axis],
+                        values=grouped[value_column],
+                        hole=0.38,
+                        marker={"colors": palette[: len(grouped)]},
+                    )
+                ]
+            )
+        elif chart_type == "Line":
+            fig = go.Figure(data=[go.Scatter(x=grouped[x_axis], y=grouped[value_column], mode="lines+markers", line={"color": palette[0]})])
+        elif chart_type == "Scatter":
+            fig = go.Figure(data=[go.Scatter(x=grouped[x_axis], y=grouped[value_column], mode="markers", marker={"color": palette[0], "size": 10})])
+        else:
+            fig = go.Figure(data=[go.Bar(x=grouped[x_axis], y=grouped[value_column], marker={"color": palette[: len(grouped)]})])
+        fig.update_layout(title=title, height=430, margin={"l": 48, "r": 24, "t": 64, "b": 96})
+        fig.update_xaxes(automargin=True)
+        fig.update_yaxes(automargin=True)
+        st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_local_dataset_workbench(df: pd.DataFrame, filename: str, branding: dict) -> None:
+    st.success(f"Previewing local dataset: {filename}")
+    summary = _local_summary(df)
+    render_summary_metrics(summary)
+
+    rows = st.slider("Preview rows", min_value=5, max_value=100, value=min(10, max(5, len(df))), step=5, key="local_preview_rows")
+    st.subheader("Preview")
+    st.dataframe(df.head(rows), use_container_width=True)
+
+    with st.expander("Column Schema", expanded=False):
+        schema = pd.DataFrame(
+            [{"column": column, "dtype": str(dtype), "missing": int(df[column].isna().sum())} for column, dtype in df.dtypes.items()]
+        )
+        st.dataframe(schema, use_container_width=True, hide_index=True)
+
+    numeric_columns = df.select_dtypes(include="number").columns.tolist()
+    palette = [
+        branding.get("primary_color", "#0078D4"),
+        branding.get("secondary_color", "#004E8C"),
+        branding.get("accent_color", "#F2C811"),
+        "#10B981",
+        "#F97316",
+    ]
+    _render_local_kpis(df, numeric_columns)
+    _render_local_chart_builder(df, palette)
+
+
+def render_dataset_upload_area(client: BackendClient) -> None:
+    with st.container(border=True):
+        st.subheader("Upload CSV Dataset")
+        st.caption("Upload data here. Logo upload lives only in Branding Settings.")
+        uploaded_file = st.file_uploader("Choose a CSV or Excel file", type=["csv", "xlsx", "xlsm"], key="dataset_upload_main")
+        if uploaded_file is None:
+            return
+
+        st.caption(f"Selected file: {uploaded_file.name}")
+        if st.button("Upload and Preview Dataset", type="primary", use_container_width=True):
+            try:
+                local_df = _read_uploaded_dataframe(uploaded_file)
+                local_dataset_id = f"local::{uploaded_file.name}"
+                local_dataset = {"dataset_id": local_dataset_id, "original_filename": uploaded_file.name, "dataframe": local_df}
+                st.session_state["uploaded_datasets"][local_dataset_id] = local_dataset
+                st.session_state["active_dataset_id"] = local_dataset_id
+                st.session_state["selected_dataset_id"] = local_dataset_id
+                st.session_state["active_dataframe"] = local_df
+                st.session_state["local_uploaded_dataset"] = {"filename": uploaded_file.name, "dataframe": local_df}
+            except Exception as exc:
+                st.warning(f"Could not preview this file locally. Check that it is a valid CSV or Excel file. Details: {exc}")
+                return
+
+            try:
+                result = client.upload_csv(uploaded_file)
+                st.success(result.get("message", "Dataset uploaded."))
+                backend_dataset_id = result["dataset_id"]
+                st.session_state["uploaded_datasets"][backend_dataset_id] = {
+                    "dataset_id": backend_dataset_id,
+                    "original_filename": uploaded_file.name,
+                    "dataframe": local_df,
+                }
+                st.session_state["active_dataset_id"] = backend_dataset_id
+                st.session_state["selected_dataset_id"] = backend_dataset_id
+                st.session_state["active_dataframe"] = local_df
+                st.rerun()
+            except requests.RequestException as exc:
+                st.info(f"Backend upload is unavailable, so the local preview is shown instead. Details: {exc}")
+
+
 def render_dataset_overview(client: BackendClient) -> None:
     st.header("Dataset Preview")
-    dataset_id = select_dataset(client)
+    branding = st.session_state.get("branding", DEFAULT_BRANDING)
+    render_dataset_upload_area(client)
+    st.divider()
+
+    dataset_id = select_dataset(client, key="dataset_preview_select")
     if not dataset_id:
+        local_dataset = st.session_state.get("local_uploaded_dataset")
+        if local_dataset:
+            _render_local_dataset_workbench(local_dataset["dataframe"], local_dataset["filename"], branding)
+        return
+
+    if str(dataset_id).startswith("local::"):
+        active_df = st.session_state.get("active_dataframe")
+        local_dataset = st.session_state.get("uploaded_datasets", {}).get(dataset_id, {})
+        if active_df is not None:
+            _render_local_dataset_workbench(active_df, local_dataset.get("original_filename", "Uploaded dataset"), branding)
+        else:
+            st.info("Upload a dataset first from Dataset Preview.")
         return
 
     rows = st.slider("Preview rows", min_value=5, max_value=100, value=10, step=5)
@@ -250,7 +523,10 @@ def render_dataset_overview(client: BackendClient) -> None:
         st.subheader("Preview")
         st.dataframe(pd.DataFrame(preview["rows"]), use_container_width=True)
     except requests.RequestException as exc:
-        st.error(f"Could not load preview: {exc}")
+        st.warning(f"Could not load backend preview. Showing local preview if available. Details: {exc}")
+        local_dataset = st.session_state.get("local_uploaded_dataset")
+        if local_dataset:
+            _render_local_dataset_workbench(local_dataset["dataframe"], local_dataset["filename"], branding)
 
 
 def _build_filter_payload(schema: dict, key_prefix: str) -> dict:
@@ -298,7 +574,7 @@ def _dashboard_studio_slicer_payload(schema: dict, dataset_id: str) -> dict:
 
     st.subheader("Slicers")
     st.selectbox("Apply slicers to", ["All visuals"], index=0)
-    st.caption("Selected-visual-only filtering is planned for a later phase; Phase 3 applies slicers to all Dashboard Studio visuals.")
+    st.caption("Slicers currently apply to all Dashboard Studio visuals.")
 
     left, right = st.columns([3, 1])
     selected_fields = left.multiselect(
@@ -703,7 +979,7 @@ def render_dashboard(client: BackendClient) -> None:
             else client.get_dashboard(dataset_id)
         )
     except requests.RequestException as exc:
-        st.error(f"Could not load analytics: {exc}")
+        st.warning(f"Could not load analytics right now: {exc}")
         return
 
     _render_dashboard_header(dashboard, summary)
@@ -747,9 +1023,14 @@ def render_dashboard(client: BackendClient) -> None:
 
 
 def render_ai_insights(client: BackendClient) -> None:
-    st.header("Phase 3: AI Insights + Natural Language Questions")
-    dataset_id = select_dataset(client)
+    st.header("Natural Language Business Insights")
+    dataset_id = st.session_state.get("active_dataset_id") or st.session_state.get("selected_dataset_id")
     if not dataset_id:
+        st.info("Upload a dataset first from Dataset Preview.")
+        return
+    if str(dataset_id).startswith("local::"):
+        st.info("Upload a dataset first from Dataset Preview.")
+        st.caption("Local preview data is still available in Dataset Preview. Start the backend and upload the dataset there to generate AI insights.")
         return
 
     try:
@@ -757,7 +1038,7 @@ def render_ai_insights(client: BackendClient) -> None:
         domain_payload = client.get_domain_intelligence(dataset_id)
         insights = insight_payload.get("insights", [])
     except requests.RequestException as exc:
-        st.error(f"Could not load insights: {exc}")
+        st.warning(f"Could not load insights right now: {exc}")
         return
 
     detection = domain_payload.get("detection", {})
@@ -821,7 +1102,7 @@ def render_ai_insights(client: BackendClient) -> None:
             with st.expander("Analyst plan"):
                 st.json(answer.get("analyst", {}))
         except requests.RequestException as exc:
-            st.error(f"Could not answer question: {exc}")
+            st.warning(f"Could not answer question right now: {exc}")
 
 
 def render_visual_builder(client: BackendClient) -> None:
@@ -834,7 +1115,7 @@ def render_visual_builder(client: BackendClient) -> None:
     try:
         schema = client.get_visual_builder_schema(dataset_id)
     except requests.RequestException as exc:
-        st.error(f"Could not load visual builder schema: {exc}")
+        st.warning(f"Could not load visual builder schema right now: {exc}")
         return
 
     dimensions = [field["name"] for field in schema.get("dimensions", [])]
@@ -1047,7 +1328,7 @@ def render_visual_builder(client: BackendClient) -> None:
         try:
             visual = client.render_visual(dataset_id, spec)
         except requests.RequestException as exc:
-            st.error(f"Could not render visual: {exc}")
+            st.warning(f"Could not render visual right now: {exc}")
             return
 
         for warning in visual.get("semantic_warnings", []):
@@ -1183,7 +1464,7 @@ def render_reports(client: BackendClient) -> None:
     try:
         report = client.get_report(dataset_id)
     except requests.RequestException as exc:
-        st.error(f"Could not load report preview: {exc}")
+        st.warning(f"Could not load report preview right now: {exc}")
         return
 
     branding = report.get("branding", {})
@@ -1288,7 +1569,7 @@ def render_sql_lab(client: BackendClient) -> None:
         templates = client.get_sql_templates(dataset_id).get("templates", [])
         history = client.get_sql_history(dataset_id)
     except requests.RequestException as exc:
-        st.error(f"Could not load SQL Lab: {exc}")
+        st.warning(f"Could not load SQL Lab right now: {exc}")
         return
 
     if "sql_lab_query" not in st.session_state:
@@ -1318,7 +1599,7 @@ def render_sql_lab(client: BackendClient) -> None:
 
     with left:
         prompt = st.text_input("Generate SQL from natural language", placeholder="Show top 10 customers by revenue")
-        if st.button("Generate SQL", disabled=not prompt.strip()):
+        if st.button("Generate SQL", disabled=not prompt.strip(), key=f"sql_generate_{dataset_id}"):
             try:
                 generated = client.generate_sql(dataset_id, prompt)
                 st.session_state["sql_lab_query_pending"] = generated["sql"]
@@ -1326,45 +1607,45 @@ def render_sql_lab(client: BackendClient) -> None:
                 st.session_state["sql_lab_message"] = generated.get("explanation", "")
                 st.rerun()
             except requests.RequestException as exc:
-                st.error(f"Could not generate SQL: {exc}")
+                st.warning(f"Could not generate SQL right now: {exc}")
 
         sql = st.text_area("SQL editor", key="sql_lab_query", height=180)
         limit = st.slider("Preview limit", 10, 1000, 100, step=10)
         actions = st.columns(5)
 
-        if actions[0].button("Run", type="primary", use_container_width=True):
+        if actions[0].button("Run", type="primary", use_container_width=True, key=f"sql_run_{dataset_id}"):
             try:
                 result = client.run_sql(dataset_id, sql, limit)
                 st.session_state["sql_lab_result"] = result
             except requests.RequestException as exc:
-                st.error(f"SQL failed: {exc}")
-        if actions[1].button("Explain", use_container_width=True):
+                st.warning(f"SQL failed: {exc}")
+        if actions[1].button("Explain", use_container_width=True, key=f"sql_explain_{dataset_id}"):
             try:
                 st.info(client.explain_sql(sql).get("explanation", ""))
             except requests.RequestException as exc:
-                st.error(f"Could not explain SQL: {exc}")
-        if actions[2].button("Optimize", use_container_width=True):
+                st.warning(f"Could not explain SQL right now: {exc}")
+        if actions[2].button("Optimize", use_container_width=True, key=f"sql_optimize_{dataset_id}"):
             try:
                 optimized = client.optimize_sql(sql)
                 st.session_state["sql_lab_query_pending"] = optimized["sql"]
                 st.session_state["sql_lab_message"] = optimized.get("suggestions", "")
                 st.rerun()
             except requests.RequestException as exc:
-                st.error(f"Could not optimize SQL: {exc}")
+                st.warning(f"Could not optimize SQL right now: {exc}")
         if st.session_state.get("sql_lab_message"):
             st.info(st.session_state.pop("sql_lab_message"))
-        if actions[3].button("Detect Errors", use_container_width=True):
+        if actions[3].button("Detect Errors", use_container_width=True, key=f"sql_detect_errors_{dataset_id}"):
             try:
                 checked = client.detect_sql_errors(sql)
-                st.success("No SQL safety issues detected.") if checked.get("valid") else st.error(checked.get("error", "Invalid SQL"))
+                st.success("No SQL safety issues detected.") if checked.get("valid") else st.warning(checked.get("error", "Invalid SQL"))
             except requests.RequestException as exc:
-                st.error(f"Could not detect errors: {exc}")
-        if actions[4].button("Save", use_container_width=True):
+                st.warning(f"Could not detect SQL errors right now: {exc}")
+        if actions[4].button("Save", use_container_width=True, key=f"sql_save_{dataset_id}"):
             try:
                 client.save_sql(dataset_id, f"Query {len(history.get('saved_queries', [])) + 1}", sql)
                 st.success("Query saved.")
             except requests.RequestException as exc:
-                st.error(f"Could not save query: {exc}")
+                st.warning(f"Could not save query right now: {exc}")
 
         result = st.session_state.get("sql_lab_result")
         if result:
@@ -1407,7 +1688,7 @@ def render_presentation_mode(client: BackendClient) -> None:
     try:
         report = client.get_report(dataset_id)
     except requests.RequestException as exc:
-        st.error(f"Could not load presentation: {exc}")
+        st.warning(f"Could not load presentation right now: {exc}")
         return
 
     slides = _presentation_slides(report)
@@ -1489,7 +1770,7 @@ def render_regional_analytics(client: BackendClient, dataset_id: str | None = No
     try:
         regional = client.get_regional_intelligence(dataset_id)
     except requests.RequestException as exc:
-        st.error(f"Could not load regional analytics: {exc}")
+        st.warning(f"Could not load regional analytics right now: {exc}")
         return
     if not regional.get("available"):
         st.info(regional.get("geo_detection", {}).get("message", "No geographic fields detected."))
@@ -1518,7 +1799,7 @@ def render_geographic_insights(client: BackendClient, dataset_id: str | None = N
     try:
         regional = client.get_regional_intelligence(dataset_id)
     except requests.RequestException as exc:
-        st.error(f"Could not load geographic insights: {exc}")
+        st.warning(f"Could not load geographic insights right now: {exc}")
         return
     if not regional.get("available"):
         st.info(regional.get("geo_detection", {}).get("message", "No geographic fields detected."))
@@ -1541,13 +1822,125 @@ def render_dax_studio(client: BackendClient) -> None:
     try:
         library = client.get_dax_library(dataset_id)
     except requests.RequestException as exc:
-        st.error(f"Could not load DAX Studio: {exc}")
+        st.warning(f"Could not load DAX Studio right now: {exc}")
         return
     if "dax_formula" not in st.session_state:
         measures = library.get("measures", [])
         st.session_state["dax_formula"] = measures[0]["dax"] if measures else "Record Count =\nCOUNTROWS('Dataset')"
     if "dax_formula_pending" in st.session_state:
         st.session_state["dax_formula"] = st.session_state.pop("dax_formula_pending")
+
+    def measure_name_from_dax(dax_text: str) -> str:
+        first_line = dax_text.strip().splitlines()[0] if dax_text.strip() else "Custom Measure"
+        return first_line.split("=", 1)[0].strip() or "Custom Measure"
+
+    def preview_dataframe() -> pd.DataFrame:
+        active_df = st.session_state.get("active_dataframe")
+        if active_df is not None:
+            return active_df.copy()
+        try:
+            return pd.DataFrame(client.get_preview(dataset_id, rows=100).get("rows", []))
+        except requests.RequestException:
+            return pd.DataFrame()
+
+    def numeric_metric_from_dax(dax_text: str, df: pd.DataFrame) -> str | None:
+        lowered = dax_text.lower()
+        numeric_columns = df.select_dtypes(include="number").columns.tolist()
+        for column in numeric_columns:
+            if f"[{column.lower()}]" in lowered or column.lower() in lowered:
+                return column
+        return numeric_columns[0] if numeric_columns else None
+
+    def category_column(df: pd.DataFrame, metric: str | None) -> str | None:
+        candidates = [column for column in df.columns if column != metric and not pd.api.types.is_numeric_dtype(df[column])]
+        return candidates[0] if candidates else None
+
+    def dax_preview_value(dax_text: str, df: pd.DataFrame, metric: str | None) -> float | int | str:
+        lowered = dax_text.lower()
+        if df.empty:
+            return "No preview data"
+        if "countrows" in lowered or metric is None:
+            return int(len(df))
+        series = pd.to_numeric(df[metric], errors="coerce")
+        if "average" in lowered or "average(" in lowered:
+            return round(float(series.mean()), 2)
+        if "divide" in lowered or "rate" in lowered or "%" in lowered:
+            denominator = max(len(df), 1)
+            return round(float(series.sum()) / denominator, 4)
+        return round(float(series.sum()), 2)
+
+    def render_best_visual_preview(package: dict, dax_text: str) -> None:
+        df = preview_dataframe()
+        best_visual = (package.get("best_visual") or package.get("measure_preview", {}).get("recommended_visual") or "KPI Card").lower()
+        metric = numeric_metric_from_dax(dax_text, df)
+        value = dax_preview_value(dax_text, df, metric)
+        measure_name = measure_name_from_dax(dax_text)
+        palette = st.session_state.get("chart_palette", ["#0078D4", "#004E8C", "#00B7C3", "#F2C811"])
+
+        st.subheader("Best Visual Preview")
+        st.caption(package.get("best_visual") or package.get("measure_preview", {}).get("recommended_visual") or "KPI Card")
+        if df.empty:
+            st.info("Preview needs dataset rows. Upload/select a dataset to render the recommended visual.")
+            return
+
+        if "gauge" in best_visual or "rate" in dax_text.lower() or "divide" in dax_text.lower():
+            numeric_value = float(value) if isinstance(value, (int, float)) else 0
+            if numeric_value <= 1:
+                numeric_value *= 100
+            fig = go.Figure(
+                go.Indicator(
+                    mode="gauge+number",
+                    value=numeric_value,
+                    number={"suffix": "%"},
+                    title={"text": measure_name},
+                    gauge={"axis": {"range": [0, 100]}, "bar": {"color": palette[0]}},
+                )
+            )
+            fig.update_layout(height=340, margin={"l": 24, "r": 24, "t": 48, "b": 24})
+            st.plotly_chart(fig, use_container_width=True)
+            return
+
+        if "line" in best_visual or "trend" in best_visual or "ytd" in dax_text.lower() or "rolling" in dax_text.lower():
+            if metric:
+                series = pd.to_numeric(df[metric], errors="coerce").fillna(0).head(50).reset_index(drop=True)
+                fig = go.Figure(data=[go.Scatter(x=list(range(1, len(series) + 1)), y=series, mode="lines+markers", line={"color": palette[0]})])
+                fig.update_layout(title=measure_name, xaxis_title="Record Sequence", yaxis_title=metric, height=360)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.metric(measure_name, value)
+            return
+
+        category = category_column(df, metric)
+        if category and metric and ("bar" in best_visual or "column" in best_visual or "comparison" in best_visual):
+            grouped = df.groupby(category, dropna=False)[metric].sum().reset_index().sort_values(metric, ascending=False).head(12)
+            grouped[category] = grouped[category].astype(str)
+            fig = go.Figure(data=[go.Bar(x=grouped[category], y=grouped[metric], marker={"color": palette[: len(grouped)]})])
+            fig.update_layout(title=measure_name, xaxis_title=category, yaxis_title=metric, height=380)
+            fig.update_xaxes(automargin=True)
+            st.plotly_chart(fig, use_container_width=True)
+            return
+
+        st.metric(measure_name, value)
+
+    def package_from_editor(dax_text: str) -> dict:
+        measure_name = measure_name_from_dax(dax_text)
+        lowered = dax_text.lower()
+        recommended = "Line Chart" if any(token in lowered for token in ["totalytd", "datesinperiod", "rolling"]) else "Gauge" if "divide" in lowered or "rate" in lowered else "KPI Card"
+        return {
+            "dax": dax_text,
+            "dax_output": dax_text,
+            "measure_preview": {
+                "measure_name": measure_name,
+                "preview_value": "",
+                "recommended_visual": recommended,
+                "preview_note": "Preview generated locally from the selected dataset.",
+            },
+            "best_visual": recommended,
+            "business_meaning": "Custom DAX measure prepared for dashboard use.",
+            "key_insight": "Use the preview to verify whether this measure belongs as a KPI, trend, or category comparison.",
+            "next_best_question": "Which segment, period, or category should this measure be compared against?",
+            "export_ready_summary": f"{measure_name} is ready to review and save as a custom DAX measure.",
+        }
 
     def render_dax_package(package: dict) -> None:
         if not package:
@@ -1584,6 +1977,7 @@ def render_dax_studio(client: BackendClient) -> None:
 
         st.subheader("Best Visual")
         st.info(package.get("best_visual") or (package.get("recommended_visual_types", ["KPI Card"])[0]))
+        render_best_visual_preview(package, dax_text)
 
         st.subheader("Dashboard Placement")
         placement = package.get("dashboard_placement", {})
@@ -1611,14 +2005,27 @@ def render_dax_studio(client: BackendClient) -> None:
     with right:
         st.subheader("DAX Library")
         st.caption(f"Detected domain: {library.get('domain', 'Generic Analytics')}")
+        custom_key = f"custom_dax_measures_{dataset_id}"
+        st.session_state.setdefault(custom_key, [])
+        custom_measures = st.session_state[custom_key]
+        if custom_measures:
+            st.markdown("**Custom Measures**")
+            for index, measure in enumerate(custom_measures):
+                if st.button(measure["name"], key=f"custom_dax_{dataset_id}_{index}", use_container_width=True):
+                    st.session_state["dax_formula"] = measure["dax"]
+                    st.session_state["dax_package"] = package_from_editor(measure["dax"])
+                    st.rerun()
+            st.divider()
+        st.markdown("**Suggested Measures**")
         for measure in library.get("measures", []):
             if st.button(measure["name"], key=f"dax_{measure['name']}", use_container_width=True):
                 st.session_state["dax_formula"] = measure["dax"]
+                st.session_state["dax_package"] = package_from_editor(measure["dax"])
                 st.rerun()
 
     with left:
         prompt = st.text_input("Generate DAX from natural language", placeholder="Create Revenue YTD")
-        if st.button("Generate DAX", disabled=not prompt.strip()):
+        if st.button("Generate DAX", disabled=not prompt.strip(), key=f"dax_generate_{dataset_id}"):
             try:
                 generated = client.generate_dax(dataset_id, prompt)
                 st.session_state["dax_formula_pending"] = generated["dax"]
@@ -1626,15 +2033,16 @@ def render_dax_studio(client: BackendClient) -> None:
                 st.session_state["dax_message"] = generated.get("explanation", "")
                 st.rerun()
             except requests.RequestException as exc:
-                st.error(f"Could not generate DAX: {exc}")
+                st.warning(f"Could not generate DAX right now: {exc}")
+        measure_label = st.text_input("Custom measure name", value=measure_name_from_dax(st.session_state.get("dax_formula", "")), key=f"dax_measure_name_{dataset_id}")
         dax = st.text_area("Power BI measure builder", key="dax_formula", height=220)
-        actions = st.columns(3)
-        if actions[0].button("Explain", use_container_width=True):
+        actions = st.columns(6)
+        if actions[0].button("Explain", use_container_width=True, key=f"dax_explain_{dataset_id}"):
             try:
                 st.info(client.explain_dax(dax).get("explanation", ""))
             except requests.RequestException as exc:
-                st.error(f"Could not explain DAX: {exc}")
-        if actions[1].button("Optimize", use_container_width=True):
+                st.warning(f"Could not explain DAX right now: {exc}")
+        if actions[1].button("Optimize", use_container_width=True, key=f"dax_optimize_{dataset_id}"):
             try:
                 optimized = client.optimize_dax(dax, dataset_id)
                 st.session_state["dax_formula_pending"] = optimized["dax"]
@@ -1642,15 +2050,24 @@ def render_dax_studio(client: BackendClient) -> None:
                 st.session_state["dax_message"] = optimized.get("suggestions", "")
                 st.rerun()
             except requests.RequestException as exc:
-                st.error(f"Could not optimize DAX: {exc}")
+                st.warning(f"Could not optimize DAX right now: {exc}")
         if st.session_state.get("dax_message"):
             st.info(st.session_state.pop("dax_message"))
-        if actions[2].button("Detect Errors", use_container_width=True):
+        if actions[2].button("Detect Errors", use_container_width=True, key=f"dax_detect_errors_{dataset_id}"):
             try:
                 checked = client.detect_dax_errors(dax)
-                st.success("No DAX structure issues detected.") if checked.get("valid") else st.error(checked.get("error", "Invalid DAX"))
+                st.success("No DAX structure issues detected.") if checked.get("valid") else st.warning(checked.get("error", "Invalid DAX"))
             except requests.RequestException as exc:
-                st.error(f"Could not detect DAX errors: {exc}")
+                st.warning(f"Could not detect DAX errors right now: {exc}")
+        if actions[3].button("Preview Visual", use_container_width=True, key=f"dax_preview_visual_{dataset_id}"):
+            st.session_state["dax_package"] = package_from_editor(dax)
+        if actions[4].button("Save Measure", use_container_width=True, key=f"dax_save_measure_{dataset_id}"):
+            saved = {"name": measure_label.strip() or measure_name_from_dax(dax), "dax": dax}
+            st.session_state[custom_key] = [item for item in st.session_state[custom_key] if item["name"] != saved["name"]]
+            st.session_state[custom_key].append(saved)
+            st.success(f"Saved custom DAX measure: {saved['name']}")
+        if actions[5].button("Use as KPI", use_container_width=True, key=f"dax_use_as_kpi_{dataset_id}"):
+            st.session_state["dax_package"] = {**package_from_editor(dax), "best_visual": "KPI Card"}
         render_dax_package(st.session_state.get("dax_package", {}))
 
 
@@ -1800,10 +2217,16 @@ def render_location_insights(client: BackendClient) -> None:
 def main() -> None:
     api_base_url = st.sidebar.text_input("Backend API URL", value=DEFAULT_API_BASE_URL)
     client = get_client(api_base_url)
-    branding = get_active_branding(client)
+    if "branding" not in st.session_state:
+        initialize_session_state(get_active_branding(client))
+    else:
+        initialize_session_state()
+    branding = st.session_state["branding"]
 
     st.title(branding.get("company_name", "AI Analytics SaaS MVP"))
     st.caption(branding.get("report_title", "Executive Decision Intelligence Report"))
+    if branding.get("report_subtitle"):
+        st.caption(branding["report_subtitle"])
 
     render_backend_status(client)
     render_theme_selector(client)
@@ -1842,6 +2265,9 @@ def main() -> None:
         render_location_insights(client)
     elif page == "Storyboard Builder":
         render_storyboard_builder(client)
+
+    if branding.get("footer_note"):
+        st.caption(branding["footer_note"])
 
 
 if __name__ == "__main__":

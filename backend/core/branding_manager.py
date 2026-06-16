@@ -16,6 +16,8 @@ HEX_COLOR = re.compile(r"^#[0-9A-Fa-f]{6}$")
 class OrganizationBranding:
     company_name: str = "AI Analytics"
     report_title: str = "Executive Decision Intelligence Report"
+    report_subtitle: str = "Upload a dataset to generate board-ready KPIs, charts, and insights."
+    footer_note: str = ""
     logo_url: str = ""
     logo_path: str = ""
     primary_color: str = "#118DFF"
