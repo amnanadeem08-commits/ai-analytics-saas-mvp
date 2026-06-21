@@ -1104,6 +1104,66 @@ def render_ai_insights(client: BackendClient) -> None:
         except requests.RequestException as exc:
             st.warning(f"Could not answer question right now: {exc}")
 
+    render_rag_section(client, dataset_id)
+
+
+def render_rag_section(client: BackendClient, dataset_id: str) -> None:
+    st.subheader("RAG Retrieval Preview")
+    st.caption("Phase 1 indexes local dataset summaries, schema, profiles, generated insights, and limited sample rows. It retrieves chunks only and does not generate LLM answers yet.")
+
+    try:
+        status = client.get_rag_status(dataset_id)
+    except requests.RequestException as exc:
+        st.warning(f"Could not load RAG status: {exc}")
+        return
+
+    status_cols = st.columns(4)
+    status_cols[0].metric("Index Status", status.get("status", "unknown"))
+    status_cols[1].metric("Chunks", status.get("chunk_count", 0))
+    status_cols[2].metric("Collection", status.get("collection", "analytics_chunks"))
+    status_cols[3].metric("Indexed", "Yes" if status.get("indexed") else "No")
+    if status.get("last_indexed_at"):
+        st.caption(f"Last indexed: {status['last_indexed_at']}")
+
+    control_cols = st.columns([1, 1, 2])
+    rebuild = control_cols[0].checkbox("Rebuild", key=f"rag_rebuild_{dataset_id}")
+    max_row_samples = control_cols[1].number_input("Row samples", min_value=0, max_value=100, value=20, step=5, key=f"rag_samples_{dataset_id}")
+    if control_cols[2].button("Index dataset for retrieval", use_container_width=True):
+        with st.spinner("Indexing dataset locally with ChromaDB..."):
+            try:
+                result = client.index_rag_dataset(dataset_id, rebuild=rebuild, max_row_samples=int(max_row_samples))
+                st.success(result.get("message", "Dataset indexed."))
+                st.json(result)
+                st.rerun()
+            except requests.RequestException as exc:
+                st.warning(f"Could not index dataset: {exc}")
+
+    delete_col, _ = st.columns([1, 3])
+    if delete_col.button("Delete RAG index", use_container_width=True):
+        try:
+            result = client.delete_rag_index(dataset_id)
+            st.info(result.get("message", "RAG index deleted."))
+            st.rerun()
+        except requests.RequestException as exc:
+            st.warning(f"Could not delete RAG index: {exc}")
+
+    query = st.text_input("Retrieve relevant chunks", placeholder="Example: Which columns explain revenue or churn?", key=f"rag_query_{dataset_id}")
+    k = st.slider("Number of chunks", min_value=1, max_value=20, value=5, key=f"rag_k_{dataset_id}")
+    if st.button("Retrieve chunks", disabled=not query.strip(), key=f"rag_retrieve_{dataset_id}"):
+        try:
+            payload = client.retrieve_rag(dataset_id, query=query, k=k)
+            results = payload.get("results", [])
+            if not results:
+                st.info("No chunks returned. Index the dataset first or try a broader query.")
+            for item in results:
+                title = f"{item.get('chunk_type', 'chunk')} | {item.get('chunk_id', '')} | score {item.get('score', 0):.3f}"
+                with st.expander(title, expanded=True):
+                    st.write(item.get("text", "")[:1200])
+                    st.caption(f"Distance: {item.get('distance')}")
+                    st.json(item.get("metadata", {}))
+        except requests.RequestException as exc:
+            st.warning(f"Could not retrieve chunks: {exc}")
+
 
 def render_visual_builder(client: BackendClient) -> None:
     st.header("Dashboard Studio")

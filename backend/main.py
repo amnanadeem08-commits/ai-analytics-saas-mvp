@@ -7,6 +7,7 @@ from backend.api.routes.dax_routes import router as dax_router
 from backend.api.routes.dataset_routes import router as dataset_router
 from backend.api.routes.insight_routes import router as insight_router
 from backend.api.routes.intelligence_routes import router as intelligence_router
+from backend.api.routes.rag_routes import router as rag_router
 from backend.api.routes.report_routes import router as report_router
 from backend.api.routes.sql_lab_routes import router as sql_lab_router
 from backend.api.routes.theme_routes import router as theme_router
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
     app.include_router(insight_router)
     app.include_router(intelligence_router)
     app.include_router(visual_builder_router)
+    app.include_router(rag_router)
     app.include_router(report_router)
     app.include_router(theme_router)
     app.include_router(branding_router)

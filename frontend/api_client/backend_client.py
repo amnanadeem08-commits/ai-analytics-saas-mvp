@@ -195,6 +195,34 @@ class BackendClient:
         response.raise_for_status()
         return response.json()
 
+    def get_rag_status(self, dataset_id: str) -> dict[str, Any]:
+        path = endpoints.RAG_STATUS.format(dataset_id=dataset_id)
+        response = requests.get(self._url(path), timeout=20)
+        response.raise_for_status()
+        return response.json()
+
+    def index_rag_dataset(self, dataset_id: str, rebuild: bool = False, max_row_samples: int = 20) -> dict[str, Any]:
+        path = endpoints.RAG_INDEX.format(dataset_id=dataset_id)
+        response = requests.post(
+            self._url(path),
+            json={"rebuild": rebuild, "max_row_samples": max_row_samples},
+            timeout=180,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def retrieve_rag(self, dataset_id: str, query: str, k: int = 5) -> dict[str, Any]:
+        path = endpoints.RAG_RETRIEVE.format(dataset_id=dataset_id)
+        response = requests.post(self._url(path), json={"query": query, "k": k}, timeout=60)
+        response.raise_for_status()
+        return response.json()
+
+    def delete_rag_index(self, dataset_id: str) -> dict[str, Any]:
+        path = endpoints.RAG_INDEX.format(dataset_id=dataset_id)
+        response = requests.delete(self._url(path), timeout=60)
+        response.raise_for_status()
+        return response.json()
+
     def get_domain_intelligence(self, dataset_id: str) -> dict[str, Any]:
         path = endpoints.DOMAIN_INTELLIGENCE.format(dataset_id=dataset_id)
         response = requests.get(self._url(path), timeout=30)

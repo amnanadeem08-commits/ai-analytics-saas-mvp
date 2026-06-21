@@ -17,6 +17,8 @@ class Settings:
     DATASETS_DIR: Path = DATA_DIR / "datasets"
     SAMPLES_DIR: Path = DATA_DIR / "samples"
     BRAND_ASSETS_DIR: Path = DATA_DIR / "branding"
+    RAG_INDEXES_DIR: Path = DATA_DIR / "rag_indexes"
+    VECTOR_STORE_DIR: Path = DATA_DIR / "vector_store" / "chroma"
     DATASETS_METADATA_FILE: Path = METADATA_DIR / "datasets.json"
     BRANDING_FILE: Path = METADATA_DIR / "branding.json"
     SQL_QUERIES_FILE: Path = METADATA_DIR / "sql_queries.json"
@@ -42,6 +44,8 @@ def ensure_data_directories() -> None:
         settings.DATASETS_DIR,
         settings.SAMPLES_DIR,
         settings.BRAND_ASSETS_DIR,
+        settings.RAG_INDEXES_DIR,
+        settings.VECTOR_STORE_DIR,
     ]:
         directory.mkdir(parents=True, exist_ok=True)
 
