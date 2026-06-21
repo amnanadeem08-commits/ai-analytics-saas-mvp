@@ -1022,8 +1022,95 @@ def render_dashboard(client: BackendClient) -> None:
                 render_insight(insight)
 
 
+def _ai_dashboard_css(primary: str, secondary: str, accent: str) -> None:
+    st.markdown(
+        f"""
+        <style>
+        .ai-hero {{
+            padding: 1.15rem 1.25rem;
+            border-radius: 24px;
+            color: white;
+            background: radial-gradient(circle at 10% 20%, rgba(255,255,255,.28), transparent 24%),
+                        linear-gradient(135deg, {primary}, {secondary} 52%, {accent});
+            box-shadow: 0 18px 48px rgba(15,23,42,.18);
+            margin-bottom: 1rem;
+        }}
+        .ai-hero h1 {{ margin: 0; font-size: 2rem; line-height: 1.1; }}
+        .ai-hero p {{ margin: .4rem 0 0; opacity: .92; }}
+        .ai-card {{
+            border: 1px solid rgba(148,163,184,.22);
+            border-radius: 20px;
+            padding: 1rem;
+            background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(248,250,252,.78));
+            box-shadow: 0 12px 34px rgba(15,23,42,.08);
+            min-height: 116px;
+        }}
+        .ai-card-title {{ color: #64748B; font-size: .78rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }}
+        .ai-card-value {{ color: #0F172A; font-size: 1.55rem; font-weight: 900; margin-top: .25rem; }}
+        .ai-card-caption {{ color: #475569; font-size: .86rem; margin-top: .35rem; line-height: 1.35; }}
+        .evidence-pill {{
+            display: inline-block; padding: .28rem .55rem; border-radius: 999px; margin: .12rem;
+            color: #0F172A; background: rgba(14,165,233,.11); border: 1px solid rgba(14,165,233,.22);
+            font-size: .78rem; font-weight: 700;
+        }}
+        .rag-box {{ border-left: 5px solid {accent}; padding: .85rem 1rem; border-radius: 14px; background: rgba(255,255,255,.82); }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _html_card(title: str, value: str | int | float, caption: str = "", color: str = "#118DFF") -> None:
+    st.markdown(
+        f"""
+        <div class="ai-card" style="border-top: 5px solid {color};">
+            <div class="ai-card-title">{html.escape(str(title))}</div>
+            <div class="ai-card-value">{html.escape(str(value))}</div>
+            <div class="ai-card-caption">{html.escape(str(caption))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _evidence_pills(items: list[str], empty_text: str = "No explicit evidence returned yet.") -> None:
+    if not items:
+        st.caption(empty_text)
+        return
+    st.markdown("".join(f'<span class="evidence-pill">{html.escape(str(item))}</span>' for item in items[:12]), unsafe_allow_html=True)
+
+
+def _numeric_evidence_chart(title: str, rows: list[dict], label_key: str, value_key: str, palette: list[str]) -> None:
+    cleaned = [row for row in rows if isinstance(row, dict) and row.get(label_key) is not None and isinstance(row.get(value_key), (int, float))]
+    if not cleaned:
+        return
+    fig = go.Figure(
+        data=[go.Bar(
+            x=[str(row[label_key]) for row in cleaned[:8]],
+            y=[row[value_key] for row in cleaned[:8]],
+            marker_color=[palette[i % len(palette)] for i, _ in enumerate(cleaned[:8])],
+        )]
+    )
+    fig.update_layout(title=title, height=280, margin=dict(l=10, r=10, t=45, b=10), template="plotly_white")
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def render_ai_insights(client: BackendClient) -> None:
-    st.header("Natural Language Business Insights")
+    primary = st.session_state.get("primary_color", "#118DFF")
+    secondary = st.session_state.get("secondary_color", "#12239E")
+    accent = st.session_state.get("branding", DEFAULT_BRANDING).get("accent_color", "#E66C37")
+    palette = st.session_state.get("chart_palette", [primary, secondary, accent, "#10B981", "#F59E0B"])
+    _ai_dashboard_css(primary, secondary, accent)
+
+    st.markdown(
+        """
+        <div class="ai-hero">
+            <h1>Universal AI Insights & RAG Evidence</h1>
+            <p>Dataset-aware narrative intelligence, quantified evidence, root-cause signals, and transparent answer support for any uploaded dataset.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     dataset_id = st.session_state.get("active_dataset_id") or st.session_state.get("selected_dataset_id")
     if not dataset_id:
         st.info("Upload a dataset first from Dataset Preview.")
@@ -1036,73 +1123,122 @@ def render_ai_insights(client: BackendClient) -> None:
     try:
         insight_payload = client.get_insights(dataset_id)
         domain_payload = client.get_domain_intelligence(dataset_id)
+        dashboard_payload = client.get_dashboard(dataset_id)
         insights = insight_payload.get("insights", [])
     except requests.RequestException as exc:
         st.warning(f"Could not load insights right now: {exc}")
         return
 
     detection = domain_payload.get("detection", {})
-    st.subheader("Domain Intelligence")
-    cols = st.columns(3)
-    cols[0].metric("Detected Domain", detection.get("domain", "Generic Analytics"))
-    cols[1].metric("Confidence", detection.get("confidence", "low").title())
-    cols[2].metric("Domain KPIs", len(domain_payload.get("domain_kpis", [])))
-    st.caption(detection.get("business_context", ""))
-
-    domain_mode = domain_payload.get("domain_mode", {})
-    if domain_mode.get("available"):
-        with st.expander(f"{domain_mode.get('mode', '').title()} Analytics Mode", expanded=True):
-            st.write(f"**What happened:** {domain_mode.get('what_happened', '')}")
-            st.write(f"**Why it happened:** {domain_mode.get('why_it_happened', '')}")
-            st.write(f"**What to do:** {domain_mode.get('what_to_do', '')}")
-            st.write(f"**Expected impact:** {domain_mode.get('expected_impact', '')}")
-            st.json({key: value for key, value in domain_mode.items() if key not in {'what_happened', 'why_it_happened', 'what_to_do', 'expected_impact'}})
-
+    summary = dashboard_payload.get("summary", {})
     root_causes = domain_payload.get("root_causes", [])
-    if root_causes:
-        with st.expander("Root Cause Engine", expanded=True):
-            st.dataframe(safe_table(root_causes), use_container_width=True)
+    executive = insight_payload.get("executive_summary") or {}
+    evidence = executive.get("evidence", [])
 
-    executive = insight_payload.get("executive_summary")
-    if executive:
-        st.subheader("Executive Summary")
-        st.info(f"**Insight**\n\n{executive.get('insight', '')}")
-        st.write(f"**Reason:** {executive.get('reason', '')}")
-        st.write(f"**Action:** {executive.get('action', '')}")
-        ceo_insights = executive.get("ceo_insights", [])
-        if ceo_insights:
-            st.subheader("CEO Insight Framework")
-            for item in ceo_insights:
-                with st.expander(item.get("metric", "Metric"), expanded=True):
-                    st.write(f"**What happened:** {item.get('what_happened', '')}")
-                    st.write(f"**Why it happened:** {item.get('why_it_happened', '')}")
-                    st.write(f"**What to do:** {item.get('what_to_do', '')}")
-                    st.write(f"**Expected impact:** {item.get('expected_impact', '')}")
-                    st.write(f"**Confidence:** {item.get('confidence', '')}")
-        with st.expander("Evidence"):
-            for item in executive.get("evidence", []):
-                st.write(f"- {item}")
+    top = st.columns(4)
+    with top[0]:
+        _html_card("Detected Pattern", detection.get("domain", "Generic Analytics"), detection.get("business_context", "Dataset-level analytical decision support."), palette[0])
+    with top[1]:
+        _html_card("Confidence", str(detection.get("confidence", "low")).title(), f"Signals: {', '.join(detection.get('signals', [])[:4]) or 'schema + statistics'}", palette[1])
+    with top[2]:
+        _html_card("Insight Cards", len(insights), "Rule-based findings generated from uploaded data.", palette[2])
+    with top[3]:
+        _html_card("Evidence Blocks", len(evidence) + len(root_causes), "Executive evidence plus root-cause candidates.", palette[3 % len(palette)])
 
-    st.subheader("Rule-Based Insights")
-    for insight in insights:
-        render_insight(insight)
+    tab_overview, tab_evidence, tab_ask, tab_raw = st.tabs(["Insight Command Center", "RAG Evidence Board", "Ask with Evidence", "Technical Trace"])
 
-    st.subheader("Ask a Question")
-    question = st.text_input(
-        "Ask about this dataset",
-        placeholder="Example: Which product has the highest sales?",
-    )
+    with tab_overview:
+        left, right = st.columns([1.15, .85])
+        with left:
+            st.subheader("Executive Narrative")
+            if executive:
+                st.markdown(f"<div class='rag-box'><b>Insight</b><br>{html.escape(str(executive.get('insight', '')))}</div>", unsafe_allow_html=True)
+                cols = st.columns(2)
+                cols[0].success(f"Reason: {executive.get('reason', 'Not provided')}")
+                cols[1].info(f"Action: {executive.get('action', 'Not provided')}")
+            else:
+                st.info("No executive summary returned. Showing available rule-based insights below.")
 
-    if st.button("Ask", disabled=not question.strip()):
-        try:
-            answer = client.ask_question(dataset_id, question)
-            st.success(answer["answer"])
-            with st.expander("Supporting data"):
-                st.json(answer.get("supporting_data", {}))
-            with st.expander("Analyst plan"):
-                st.json(answer.get("analyst", {}))
-        except requests.RequestException as exc:
-            st.warning(f"Could not answer question right now: {exc}")
+            st.subheader("Color-Coded Insight Stream")
+            for insight in insights:
+                render_insight(insight)
+        with right:
+            st.subheader("Dataset Intelligence")
+            kpi_rows = domain_payload.get("domain_kpis", [])
+            if kpi_rows:
+                for idx, item in enumerate(kpi_rows[:5]):
+                    suffix = "%" if item.get("format") == "percent" else ""
+                    _html_card(item.get("label", "KPI"), f"{item.get('value', '')}{suffix}", "Smart KPI derived from detected fields.", palette[idx % len(palette)])
+            else:
+                _html_card("Rows", summary.get("row_count", "Available"), "Universal profile metric from dashboard summary.", palette[0])
+                _html_card("Columns", len(summary.get("columns", [])) if isinstance(summary.get("columns"), list) else "Available", "Schema breadth available for analysis.", palette[1])
+            if detection.get("common_metrics"):
+                st.markdown("##### Relevant Metric Ideas")
+                _evidence_pills(detection.get("common_metrics", []))
+
+        domain_mode = domain_payload.get("domain_mode", {})
+        if domain_mode.get("available"):
+            st.subheader("Adaptive Domain Mode")
+            mode_cols = st.columns(4)
+            for idx, key in enumerate(["what_happened", "why_it_happened", "what_to_do", "expected_impact"]):
+                with mode_cols[idx]:
+                    _html_card(key.replace("_", " ").title(), domain_mode.get(key, "Not available"), "", palette[idx % len(palette)])
+
+    with tab_evidence:
+        st.subheader("RAG Evidence Board")
+        st.caption("Evidence is displayed from existing backend analyst and insight payloads. No retrieval architecture changes were made.")
+        _evidence_pills(evidence, "Executive summary did not return explicit evidence bullets.")
+        if root_causes:
+            rows = []
+            for cause in root_causes:
+                rows.append({"metric": cause.get("metric"), "driver_count": len(cause.get("potential_drivers", [])), "evidence": cause.get("supporting_evidence"), "action": cause.get("recommended_action")})
+            _numeric_evidence_chart("Root-Cause Evidence Density", rows, "metric", "driver_count", palette)
+            st.dataframe(safe_table(rows), use_container_width=True, hide_index=True)
+            for cause in root_causes:
+                with st.expander(f"Evidence chain: {cause.get('metric', 'Metric')}", expanded=False):
+                    st.write(cause.get("supporting_evidence", ""))
+                    st.write(cause.get("recommended_action", ""))
+                    if cause.get("potential_drivers"):
+                        st.dataframe(safe_table(cause["potential_drivers"]), use_container_width=True, hide_index=True)
+        else:
+            st.info("No root-cause candidates were returned for this dataset. Try a dataset with numeric measures and segment/category columns.")
+
+    with tab_ask:
+        st.subheader("Ask a Question and Inspect the Support")
+        question = st.text_input("Ask about this dataset", placeholder="Example: What segment, category, or field appears most important?")
+        if st.button("Ask", disabled=not question.strip(), type="primary"):
+            try:
+                answer = client.ask_question(dataset_id, question)
+                st.markdown(f"<div class='rag-box'><b>Answer</b><br>{html.escape(str(answer.get('answer', '')))}</div>", unsafe_allow_html=True)
+                support = answer.get("supporting_data", {})
+                analyst = answer.get("analyst", {})
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("##### Supporting Data")
+                    if isinstance(support, dict):
+                        for key, value in support.items():
+                            if isinstance(value, list) and value and isinstance(value[0], dict):
+                                st.write(f"**{key.replace('_', ' ').title()}**")
+                                st.dataframe(safe_table(value), use_container_width=True, hide_index=True)
+                            else:
+                                st.json({key: value})
+                    else:
+                        st.write(support)
+                with c2:
+                    st.markdown("##### Analyst Trace")
+                    st.json(analyst)
+            except requests.RequestException as exc:
+                st.warning(f"Could not answer question right now: {exc}")
+
+    with tab_raw:
+        st.subheader("Technical Trace")
+        st.caption("Transparent raw outputs for validation, demos, and debugging.")
+        with st.expander("Insight payload", expanded=False):
+            st.json(insight_payload)
+        with st.expander("Domain intelligence payload", expanded=False):
+            st.json(domain_payload)
+        with st.expander("Dashboard payload summary", expanded=False):
+            st.json({k: dashboard_payload.get(k) for k in ["dataset_id", "summary", "suggested_questions"]})
 
 
 def render_visual_builder(client: BackendClient) -> None:
