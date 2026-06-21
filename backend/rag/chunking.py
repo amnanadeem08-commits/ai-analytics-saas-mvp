@@ -71,10 +71,10 @@ def build_rag_chunks(dataset_id: str, df: pd.DataFrame, max_row_samples: int = 2
                 ),
                 metadata={
                     "column": name,
-                    "dtype": column.get("dtype"),
-                    "semantic_type": column.get("semantic_type"),
-                    "missing_count": column.get("missing_count"),
-                    "unique_count": column.get("unique_count"),
+                    "dtype": column.get("dtype") or "",
+                    "semantic_type": column.get("semantic_type") or "",
+                    "missing_count": column.get("missing_count", 0),
+                    "unique_count": column.get("unique_count", 0),
                 },
             )
         )
@@ -84,10 +84,10 @@ def build_rag_chunks(dataset_id: str, df: pd.DataFrame, max_row_samples: int = 2
         "numeric_summary",
         "categorical_summary",
         "date_summary",
-        "outliers",
-        "correlations",
-        "trends",
-        "quality_score",
+        "outlier_summary",
+        "correlation_summary",
+        "trend_summary",
+        "data_quality_score",
     ]
     for section in profile_sections:
         value = profile.get(section)

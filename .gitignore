@@ -11,6 +11,8 @@ data/processed/*
 data/datasets/
 data/test_runs/
 data/metadata/
+data/vector_store/
+data/rag_indexes/
 data/branding/*
 !data/uploads/.gitkeep
 !data/processed/.gitkeep

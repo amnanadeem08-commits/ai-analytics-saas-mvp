@@ -10,8 +10,10 @@ COLLECTION_NAME = "analytics_chunks"
 VECTOR_STORE_PATH = settings.DATA_DIR / "vector_store" / "chroma"
 
 
-def _json_scalar(value: Any) -> str | int | float | bool | None:
-    if value is None or isinstance(value, (str, int, float, bool)):
+def _json_scalar(value: Any) -> str | int | float | bool:
+    if value is None:
+        return ""
+    if isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
 
