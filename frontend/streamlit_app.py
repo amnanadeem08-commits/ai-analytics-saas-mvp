@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
+import socket
+import subprocess
 import sys
+import time
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -11,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import html
 import json
 from datetime import date
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -26,6 +30,8 @@ from frontend.components.chart_components import (
 )
 from frontend.components.insight_cards import render_insight
 from frontend.components.metric_cards import render_summary_metrics
+from frontend.components.ai_insight_panel import render_business_insights_overview
+from frontend.components.storyboard_session import add_storyboard_entry
 
 
 st.set_page_config(page_title="AI Analytics SaaS MVP", layout="wide")
@@ -50,12 +56,97 @@ def safe_table(rows: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(normalized_rows)
 
 
+
+def _is_local_backend_url(base_url: str) -> bool:
+    parsed = urlparse(base_url)
+    host = (parsed.hostname or "").lower()
+    port = parsed.port or 80
+    return parsed.scheme in {"http", ""} and host in {"127.0.0.1", "localhost"} and port == 8000
+
+
+def _backend_python_executable() -> str:
+    venv_python = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+    if venv_python.exists():
+        return str(venv_python)
+    return sys.executable
+
+
+def _wait_for_local_backend(host: str = "127.0.0.1", port: int = 8000, timeout_seconds: float = 8.0) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.25)
+    return False
+
+
+def ensure_backend_available(client: BackendClient) -> bool:
+    try:
+        client.health()
+        st.session_state["backend_autostart_error"] = ""
+        return True
+    except requests.RequestException:
+        if not _is_local_backend_url(client.base_url):
+            return False
+
+    if st.session_state.get("backend_autostart_failed"):
+        return False
+
+    if not st.session_state.get("backend_autostart_attempted"):
+        creation_flags = 0
+        if os.name == "nt":
+            creation_flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        try:
+            subprocess.Popen(
+                [
+                    _backend_python_executable(),
+                    "-m",
+                    "uvicorn",
+                    "backend.main:app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    "8000",
+                ],
+                cwd=PROJECT_ROOT,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=creation_flags,
+            )
+            st.session_state["backend_autostart_attempted"] = True
+            st.session_state["backend_autostart_failed"] = False
+            st.session_state["backend_autostart_error"] = ""
+        except OSError as exc:
+            st.session_state["backend_autostart_attempted"] = True
+            st.session_state["backend_autostart_failed"] = True
+            st.session_state["backend_autostart_error"] = str(exc)
+            return False
+
+    if _wait_for_local_backend():
+        try:
+            client.health()
+            st.session_state["backend_autostart_error"] = ""
+            return True
+        except requests.RequestException:
+            pass
+
+    st.session_state["backend_autostart_failed"] = True
+    st.session_state["backend_autostart_error"] = "The local backend did not respond on http://127.0.0.1:8000."
+    return False
+
+
 def render_backend_status(client: BackendClient) -> None:
     try:
+        if not ensure_backend_available(client):
+            raise requests.RequestException(st.session_state.get("backend_autostart_error", "Backend unavailable"))
         health = client.health()
         st.sidebar.success(f"Backend connected: {health.get('version', '')}")
     except requests.RequestException:
         st.sidebar.warning("Backend offline. Local CSV preview still works.")
+        if st.session_state.get("backend_autostart_error"):
+            st.sidebar.caption(st.session_state["backend_autostart_error"])
 
 
 THEME_PRESETS = [
@@ -467,6 +558,10 @@ def render_dataset_upload_area(client: BackendClient) -> None:
                 st.warning(f"Could not preview this file locally. Check that it is a valid CSV or Excel file. Details: {exc}")
                 return
 
+            if not ensure_backend_available(client):
+                st.info("The local preview is ready. The backend is still starting, so server upload will become available in a moment.")
+                return
+
             try:
                 result = client.upload_csv(uploaded_file)
                 st.success(result.get("message", "Dataset uploaded."))
@@ -481,7 +576,7 @@ def render_dataset_upload_area(client: BackendClient) -> None:
                 st.session_state["active_dataframe"] = local_df
                 st.rerun()
             except requests.RequestException as exc:
-                st.info(f"Backend upload is unavailable, so the local preview is shown instead. Details: {exc}")
+                st.info(f"Backend upload is unavailable right now, so the local preview is shown instead. Details: {exc}")
 
 
 def render_dataset_overview(client: BackendClient) -> None:
@@ -1018,6 +1113,12 @@ def render_dashboard(client: BackendClient) -> None:
     with right:
         with st.container(border=True):
             st.markdown("#### Business Insights")
+            # Render polished executive summary instead of plain text
+            executive_summary = insights_payload.get("executive_summary") or {}
+            st.markdown(f"**Insight:** {executive_summary.get('insight', 'Not available')}")
+            st.caption(f"Reason: {executive_summary.get('reason', 'Not available')}")
+            st.info(f"Recommended action: {executive_summary.get('action', 'Not available')}")
+            # Render rule-based insights as compact cards
             for insight in insights_payload.get("insights", [])[:4]:
                 render_insight(insight)
 
@@ -1148,33 +1249,22 @@ def render_ai_insights(client: BackendClient) -> None:
     tab_overview, tab_evidence, tab_ask, tab_raw = st.tabs(["Insight Command Center", "RAG Evidence Board", "Ask with Evidence", "Technical Trace"])
 
     with tab_overview:
-        left, right = st.columns([1.15, .85])
-        with left:
-            st.subheader("Executive Narrative")
-            if executive:
-                st.markdown(f"<div class='rag-box'><b>Insight</b><br>{html.escape(str(executive.get('insight', '')))}</div>", unsafe_allow_html=True)
-                cols = st.columns(2)
-                cols[0].success(f"Reason: {executive.get('reason', 'Not provided')}")
-                cols[1].info(f"Action: {executive.get('action', 'Not provided')}")
-            else:
-                st.info("No executive summary returned. Showing available rule-based insights below.")
+        # Polished AI Insight panel — no raw JSON by default
+        data_quality = executive.get("metrics_snapshot", {}).get("data_quality_score") or dashboard_payload.get("data_quality_score")
+        render_business_insights_overview(
+            executive=executive,
+            data_quality=data_quality,
+            summary=summary,
+            raw_payload=insight_payload if st.session_state.get("_show_raw_insight", False) else None,
+        )
 
-            st.subheader("Color-Coded Insight Stream")
+        # Color-Coded Insight Stream (rule-based insights)
+        if insights:
+            st.markdown("#### Rule-Based Insights")
             for insight in insights:
                 render_insight(insight)
-        with right:
-            st.subheader("Dataset Intelligence")
-            kpi_rows = domain_payload.get("domain_kpis", [])
-            if kpi_rows:
-                for idx, item in enumerate(kpi_rows[:5]):
-                    suffix = "%" if item.get("format") == "percent" else ""
-                    _html_card(item.get("label", "KPI"), f"{item.get('value', '')}{suffix}", "Smart KPI derived from detected fields.", palette[idx % len(palette)])
-            else:
-                _html_card("Rows", summary.get("row_count", "Available"), "Universal profile metric from dashboard summary.", palette[0])
-                _html_card("Columns", len(summary.get("columns", [])) if isinstance(summary.get("columns"), list) else "Available", "Schema breadth available for analysis.", palette[1])
-            if detection.get("common_metrics"):
-                st.markdown("##### Relevant Metric Ideas")
-                _evidence_pills(detection.get("common_metrics", []))
+        else:
+            st.info("No rule-based insights were generated for this dataset.")
 
         domain_mode = domain_payload.get("domain_mode", {})
         if domain_mode.get("available"):
@@ -1288,8 +1378,11 @@ def render_visual_builder(client: BackendClient) -> None:
     has_spec = bool(st.session_state.get(selected_spec_key))
     if toolbar[5].button("Add to Storyboard", use_container_width=True, disabled=not has_spec):
         spec_item = st.session_state[selected_spec_key]
-        st.session_state[storyboard_key].append(spec_item)
-        st.success("Current visual added to storyboard for this session.")
+        result = add_storyboard_entry(st.session_state[storyboard_key], spec_item)
+        if result.get("added"):
+            st.success("Current visual added to storyboard for this session.")
+        else:
+            st.info("This visual already exists in the storyboard.")
     if not has_spec:
         st.caption("Create or select a visual before adding to Storyboard.")
 
@@ -1298,7 +1391,10 @@ def render_visual_builder(client: BackendClient) -> None:
         st.subheader("Recommended Visuals")
         for offset in range(0, min(len(recommended_visuals), 6), 3):
             rec_cols = st.columns(3)
-            for col, recommendation in zip(rec_cols, recommended_visuals[offset : offset + 3]):
+            for local_idx, (col, recommendation) in enumerate(
+                zip(rec_cols, recommended_visuals[offset : offset + 3])
+            ):
+                idx = offset + local_idx
                 with col.container(border=True):
                     st.markdown(f"**{recommendation.get('title', 'Recommended Visual')}**")
                     st.caption(recommendation.get("business_meaning", ""))
@@ -1309,13 +1405,16 @@ def render_visual_builder(client: BackendClient) -> None:
                     if recommendation.get("short_ai_insight"):
                         st.info(recommendation["short_ai_insight"])
                     action_cols = st.columns(2)
-                    if action_cols[0].button("Use this Visual", key=f"use_{recommendation.get('visual_id')}", use_container_width=True):
+                    if action_cols[0].button("Use this Visual", key=f"use_{recommendation.get('visual_id')}_{idx}", use_container_width=True):
                         st.session_state[selected_spec_key] = recommendation.get("spec", {})
                         st.session_state[builder_mode_key] = recommendation.get("spec", {}).get("chart_type", "chart") if recommendation.get("spec", {}).get("chart_type") != "kpi" else "chart"
                         st.rerun()
-                    if action_cols[1].button("Add to Storyboard", key=f"story_{recommendation.get('visual_id')}", use_container_width=True):
-                        st.session_state[storyboard_key].append(recommendation)
-                        st.success("Added to storyboard for this session.")
+                    if action_cols[1].button("Add to Storyboard", key=f"story_{recommendation.get('visual_id')}_{idx}", use_container_width=True):
+                        result = add_storyboard_entry(st.session_state[storyboard_key], recommendation)
+                        if result.get("added"):
+                            st.success("Added to storyboard for this session.")
+                        else:
+                            st.info("This visual already exists in the storyboard.")
 
     # Builder panels based on active mode
     builder_mode = st.session_state[builder_mode_key]
@@ -1413,6 +1512,8 @@ def render_visual_builder(client: BackendClient) -> None:
         )
         chart_options = ["bar", "horizontal_bar", "line", "pie", "table"]
         default_chart = selected_spec.get("chart_type") or (defaults.get("chart_type") if defaults.get("chart_type") in chart_options else "bar")
+        if default_chart not in chart_options:
+            default_chart = "bar"
         chart_type = st.selectbox("Chart Type", chart_options, index=chart_options.index(default_chart))
         aggregation_options = ["sum", "mean", "count", "min", "max"]
         default_aggregation = selected_spec.get("aggregation") or defaults.get("aggregation", "sum")
@@ -1485,19 +1586,39 @@ def render_visual_builder(client: BackendClient) -> None:
                     st.plotly_chart(fig, use_container_width=True)
                 card_cols = st.columns(3)
                 if card_cols[0].button("Add to Storyboard", key="add_current_visual_storyboard", use_container_width=True):
-                    st.session_state[storyboard_key].append(
+                    result = add_storyboard_entry(
+                        st.session_state[storyboard_key],
                         {
+                            "chart_id": chart.get("chart_id"),
                             "title": chart.get("title", "Dashboard Visual"),
                             "business_meaning": chart.get("metadata", {}).get("short_ai_insight", ""),
                             "suggested_chart_type": visual.get("applied_spec", {}).get("chart_type", ""),
                             "fields_used": chart.get("fields", []),
                             "spec": visual.get("applied_spec", {}),
                             "short_ai_insight": chart.get("metadata", {}).get("short_ai_insight", ""),
-                        }
+                        },
                     )
-                    st.success("Current visual added to storyboard for this session.")
-                card_cols[1].button("Export Visual", use_container_width=True, disabled=True)
-                card_cols[2].caption("Export uses report exports in this MVP phase.")
+                    if result.get("added"):
+                        st.success("Current visual added to storyboard for this session.")
+                    else:
+                        st.info("This visual already exists in the storyboard.")
+                if card_cols[1].button("Add to report", key="add_current_visual_report", use_container_width=True):
+                    if not chart.get("chart_id"):
+                        st.warning("This visual is missing a chart ID and cannot be added to Reports.")
+                    else:
+                        try:
+                            registration = client.register_visual(dataset_id, chart)
+                            if registration.get("registered"):
+                                st.success("Visual added to Reports.")
+                            else:
+                                st.info("Visual already exists in Reports and was reused.")
+                        except requests.RequestException as exc:
+                            st.warning(f"Could not add visual to Reports right now: {exc}")
+                card_cols[2].caption("Use Reports to export selected visuals as PDF, PPTX, PNG, JSON, CSV, or Excel.")
+                st.caption(
+                    "Known issue: legend, tooltip, and number format options may not be fully applied by the renderer, "
+                    "so exports can differ from the Dashboard Studio preview."
+                )
             storyboard = st.session_state.get(storyboard_key, [])
             if storyboard:
                 with st.expander(f"Storyboard ({len(storyboard)} visuals)", expanded=False):
@@ -2408,4 +2529,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

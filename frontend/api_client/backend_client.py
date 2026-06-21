@@ -96,6 +96,12 @@ class BackendClient:
         response.raise_for_status()
         return response.json()
 
+    def register_visual(self, dataset_id: str, chart: dict[str, Any]) -> dict[str, Any]:
+        path = endpoints.VISUAL_BUILDER_REGISTER.format(dataset_id=dataset_id)
+        response = requests.post(self._url(path), json=chart, timeout=30)
+        response.raise_for_status()
+        return response.json()
+
     def get_report(self, dataset_id: str) -> dict[str, Any]:
         path = endpoints.REPORT.format(dataset_id=dataset_id)
         response = requests.get(self._url(path), timeout=30)

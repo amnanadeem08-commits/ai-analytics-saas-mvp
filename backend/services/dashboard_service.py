@@ -9,6 +9,7 @@ from backend.processing.overview_service import build_dataset_overview
 from backend.core.theme_manager import theme_manager
 from backend.services.analysis_guardrail_service import build_analysis_guardrails
 from backend.services.chart_service import generate_chart_specs
+from backend.services.chart_catalog_service import load_custom_chart_specs
 from backend.services.dataset_service import load_dataset_dataframe
 from backend.services.domain_intelligence_service import build_domain_intelligence
 from backend.services.filter_service import apply_filters
@@ -58,6 +59,11 @@ def build_dashboard_view(dataset_id: str, filters: dict[str, Any] | None = None)
             },
         )
     chart_specs = generate_chart_specs(df, theme.name) + generate_geo_chart_specs(df, theme.name)
+    generated_ids = {chart["chart_id"] for chart in chart_specs}
+    chart_specs.extend(
+        chart for chart in load_custom_chart_specs(dataset_id)
+        if chart.get("chart_id") not in generated_ids
+    )
     regional = regional_analytics(df)
 
     sections = [
