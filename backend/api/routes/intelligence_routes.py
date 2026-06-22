@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from backend.api.deps import map_app_error
 from backend.services.dataset_service import load_dataset_dataframe
@@ -18,11 +18,23 @@ def domain_intelligence(dataset_id: str):
 
 
 @router.get("/{dataset_id}/regional")
-def regional_intelligence(dataset_id: str):
+def regional_intelligence(
+    dataset_id: str,
+    metric: str | None = Query(default=None),
+    aggregation: str | None = Query(default=None),
+):
     try:
         df = load_dataset_dataframe(dataset_id)
         theme = theme_manager.get_theme()
-        regional = regional_analytics(df)
-        return {**regional, "map_charts": generate_geo_chart_specs(df, theme.name)}
+        regional = regional_analytics(df, metric=metric, aggregation=aggregation)
+        return {
+            **regional,
+            "map_charts": generate_geo_chart_specs(
+                df,
+                theme.name,
+                metric=regional.get("metric"),
+                aggregation=regional.get("aggregation"),
+            ),
+        }
     except Exception as exc:
         raise map_app_error(exc) from exc

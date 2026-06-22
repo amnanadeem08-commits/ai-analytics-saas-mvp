@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import html
 import json
+import re
 from datetime import date
 from urllib.parse import urlencode, urlparse
 
@@ -937,7 +938,8 @@ def _safe_trend_text(value: str | None) -> str:
 
 
 def _kpi_id_from_label(label: str) -> str:
-    return str(label or "metric").lower().replace(" ", "_").replace("/", "_")
+    normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", str(label or "metric").strip().lower())
+    return re.sub(r"_+", "_", normalized).strip("_") or "metric"
 
 
 def _render_kpi_cards(
@@ -946,6 +948,7 @@ def _render_kpi_cards(
     *,
     on_add_to_storyboard=None,
     on_add_to_report=None,
+    key_prefix: str = "kpi_cards",
 ) -> None:
     if not cards:
         return
@@ -1060,7 +1063,7 @@ def _render_kpi_cards(
     )
     for offset in range(0, min(len(cards), 8), 4):
         cols = st.columns(4)
-        for col, card in zip(cols, cards[offset : offset + 4]):
+        for card_index, (col, card) in enumerate(zip(cols, cards[offset : offset + 4]), start=offset):
             value = card.get("value", "")
             if card.get("format") == "percent" and isinstance(value, (int, float)):
                 value = f"{value}%"
@@ -1100,11 +1103,12 @@ def _render_kpi_cards(
                 unsafe_allow_html=True,
             )
             kpi_id = card.get("kpi_id") or _kpi_id_from_label(card.get("label", "Metric"))
+            key_suffix = f"{key_prefix}_{kpi_id}_{card_index}"
             action_cols = col.columns([1, 1])
-            if action_cols[0].button("➕ Storyboard", key=f"dashboard_kpi_story_{kpi_id}", use_container_width=True):
+            if action_cols[0].button("➕ Storyboard", key=f"{key_suffix}_storyboard", use_container_width=True):
                 if callable(on_add_to_storyboard):
                     on_add_to_storyboard(card)
-            if action_cols[1].button("📌 Report", key=f"dashboard_kpi_report_{kpi_id}", use_container_width=True):
+            if action_cols[1].button("📌 Report", key=f"{key_suffix}_report", use_container_width=True):
                 if callable(on_add_to_report):
                     on_add_to_report(card)
 
@@ -1312,6 +1316,7 @@ def render_dashboard(client: BackendClient) -> None:
         dashboard.get("kpi_cards", []),
         dashboard.get("theme", {}),
         on_add_to_storyboard=_add_dashboard_kpi_to_storyboard,
+        key_prefix="main_dashboard",
     )
 
     if dashboard.get("filtered"):
@@ -2232,7 +2237,7 @@ def render_presentation_mode(client: BackendClient) -> None:
     st.markdown(f'<div class="presentation-title">{slide["title"]}</div>', unsafe_allow_html=True)
     st.markdown(f'<div class="presentation-subtitle">{branding.get("company_name", "AI Analytics")} | Slide {index + 1} of {len(slides)}</div>', unsafe_allow_html=True)
     if slide.get("kpis"):
-        _render_kpi_cards(slide["kpis"], theme)
+        _render_kpi_cards(slide["kpis"], theme, key_prefix="executive_dashboard")
     for item in slide.get("body", []):
         if item:
             st.markdown(f'<div class="presentation-body">{item}</div>', unsafe_allow_html=True)
@@ -2266,28 +2271,77 @@ def render_regional_analytics(client: BackendClient, dataset_id: str | None = No
         dataset_id = select_dataset(client, key="regional_analytics_dataset")
         if not dataset_id:
             return
+    metric_key = f"regional_metric_{dataset_id}"
+    agg_key = f"regional_agg_{dataset_id}"
     try:
-        regional = client.get_regional_intelligence(dataset_id)
+        bootstrap = client.get_regional_intelligence(dataset_id)
+        if metric_key not in st.session_state:
+            st.session_state[metric_key] = bootstrap.get("metric")
+        if agg_key not in st.session_state:
+            st.session_state[agg_key] = str(bootstrap.get("aggregation", "average")).title()
+        metric_options = bootstrap.get("available_metrics", [])
+        agg_options = bootstrap.get("aggregation_options", ["Average", "Sum", "Count", "Median"])
     except requests.RequestException as exc:
         st.warning(f"Could not load regional analytics right now: {exc}")
+        return
+    control_cols = st.columns([2, 1])
+    selected_metric = control_cols[0].selectbox(
+        "Regional metric",
+        metric_options or [st.session_state.get(metric_key) or "record_count"],
+        key=metric_key,
+    )
+    selected_aggregation = control_cols[1].selectbox(
+        "Aggregation",
+        agg_options,
+        key=agg_key,
+    )
+    try:
+        regional = client.get_regional_intelligence(
+            dataset_id,
+            metric=selected_metric,
+            aggregation=str(selected_aggregation).lower(),
+        )
+    except requests.RequestException as exc:
+        st.warning(f"Could not apply regional metric settings right now: {exc}")
         return
     if not regional.get("available"):
         st.info(regional.get("geo_detection", {}).get("message", "No geographic fields detected."))
         st.write("Recommended columns: country, state, province, region, city, territory, postal code, latitude, longitude.")
         return
+    if regional.get("regional_title"):
+        st.subheader(regional["regional_title"])
     st.subheader("Regional KPIs")
     cols = st.columns(max(1, min(3, len(regional.get("regional_kpis", [])))))
     for col, kpi in zip(cols, regional.get("regional_kpis", [])):
         col.metric(kpi.get("label", "Region"), kpi.get("region", ""), kpi.get("value", ""))
     if regional.get("regional_rows"):
         st.subheader("Regional Performance")
-        st.dataframe(pd.DataFrame(regional["regional_rows"]), use_container_width=True)
+        regional_df = pd.DataFrame(regional["regional_rows"])
+        st.dataframe(regional_df, use_container_width=True)
+        fig = go.Figure(
+            data=[
+                go.Bar(
+                    x=regional_df["region"],
+                    y=regional_df["value"],
+                    marker_color=st.session_state.get("primary_color", "#118DFF"),
+                )
+            ]
+        )
+        fig.update_layout(
+            title=regional.get("regional_title", "Regional Performance"),
+            xaxis_title=regional.get("dimension", "Region").replace("_", " ").title(),
+            yaxis_title=regional.get("metric_label", regional.get("metric", "Metric")),
+            template="ai_analytics_brand",
+            height=360,
+        )
+        st.plotly_chart(fig, use_container_width=True)
     st.subheader("Executive Regional Insights")
     for item in regional.get("regional_insights", []):
         with st.expander(item.get("title", "Regional Insight"), expanded=True):
             st.write(item.get("insight", ""))
             st.write(f"**Recommendation:** {item.get('recommendation', '')}")
-            st.json(item.get("evidence", []))
+    with st.expander("Debug regional data", expanded=False):
+        st.json(regional)
 
 
 def render_geographic_insights(client: BackendClient, dataset_id: str | None = None) -> None:
@@ -2295,8 +2349,16 @@ def render_geographic_insights(client: BackendClient, dataset_id: str | None = N
         dataset_id = select_dataset(client, key="geographic_insights_dataset")
         if not dataset_id:
             return
+    metric_key = f"regional_metric_{dataset_id}"
+    agg_key = f"regional_agg_{dataset_id}"
+    metric = st.session_state.get(metric_key)
+    aggregation = st.session_state.get(agg_key, "Average")
     try:
-        regional = client.get_regional_intelligence(dataset_id)
+        regional = client.get_regional_intelligence(
+            dataset_id,
+            metric=metric,
+            aggregation=str(aggregation).lower(),
+        )
     except requests.RequestException as exc:
         st.warning(f"Could not load geographic insights right now: {exc}")
         return
@@ -2308,7 +2370,14 @@ def render_geographic_insights(client: BackendClient, dataset_id: str | None = N
     if not charts:
         st.info("Geographic columns were detected, but no map-ready visual could be generated from the available values.")
         return
+    has_precise_map = any(chart.get("metadata", {}).get("precise_map") for chart in charts)
+    if has_precise_map:
+        st.caption("Map uses detected latitude/longitude coordinates.")
+    else:
+        st.caption("No latitude/longitude found. Showing regional visuals; any map-like view is explicitly approximate.")
     for chart in charts:
+        if chart.get("metadata", {}).get("approximate_map"):
+            st.info(chart.get("metadata", {}).get("note", "Approximate regional map view."))
         fig = go.Figure(data=chart.get("plotly", {}).get("data", []), layout=chart.get("plotly", {}).get("layout", {}))
         st.plotly_chart(fig, use_container_width=True)
 

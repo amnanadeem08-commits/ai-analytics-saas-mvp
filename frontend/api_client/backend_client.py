@@ -231,9 +231,19 @@ class BackendClient:
         response.raise_for_status()
         return response.json()
 
-    def get_regional_intelligence(self, dataset_id: str) -> dict[str, Any]:
+    def get_regional_intelligence(
+        self,
+        dataset_id: str,
+        metric: str | None = None,
+        aggregation: str | None = None,
+    ) -> dict[str, Any]:
         path = endpoints.REGIONAL_INTELLIGENCE.format(dataset_id=dataset_id)
-        response = requests.get(self._url(path), timeout=30)
+        params: dict[str, str] = {}
+        if metric:
+            params["metric"] = metric
+        if aggregation:
+            params["aggregation"] = aggregation
+        response = requests.get(self._url(path), params=params, timeout=30)
         response.raise_for_status()
         return response.json()
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 from io import BytesIO
 import logging
+import re
 import shutil
 from uuid import uuid4
 
@@ -838,8 +839,61 @@ def test_excel_export_contains_dashboard_summary_raw_data_schema_and_chart_objec
         assert xlsx_export.status_code == 200
         workbook = load_workbook(BytesIO(xlsx_export.content))
         assert "Dashboard Summary" in workbook.sheetnames
+        assert "Visual Dashboard" in workbook.sheetnames
         assert "Raw Data" in workbook.sheetnames
         assert "Column Schema" in workbook.sheetnames
-        assert len(workbook["Dashboard Summary"]._charts) >= 1
+        summary_sheet = workbook["Dashboard Summary"]
+        assert summary_sheet["A7"].value is not None
+        total_charts = sum(len(workbook[sheet]._charts) for sheet in workbook.sheetnames)
+        assert total_charts >= 1
+    finally:
+        shutil.rmtree(test_root, ignore_errors=True)
+
+
+def test_regional_insurance_defaults_to_average_charges_with_business_aware_labels(monkeypatch):
+    test_root = Path("data") / "test_runs" / uuid4().hex
+    monkeypatch.setattr(settings, "DATA_DIR", test_root)
+    monkeypatch.setattr(settings, "UPLOADS_DIR", test_root / "uploads")
+    monkeypatch.setattr(settings, "PROCESSED_DIR", test_root / "processed")
+    monkeypatch.setattr(settings, "METADATA_DIR", test_root / "metadata")
+    monkeypatch.setattr(settings, "DATASETS_DIR", test_root / "datasets")
+    monkeypatch.setattr(settings, "SAMPLES_DIR", test_root / "samples")
+    monkeypatch.setattr(settings, "BRAND_ASSETS_DIR", test_root / "branding")
+    monkeypatch.setattr(settings, "DATASETS_METADATA_FILE", test_root / "metadata" / "datasets.json")
+    monkeypatch.setattr(settings, "BRANDING_FILE", test_root / "metadata" / "branding.json")
+    monkeypatch.setattr(settings, "SQL_QUERIES_FILE", test_root / "metadata" / "sql_queries.json")
+    monkeypatch.setattr(settings, "THEME_STATE_FILE", test_root / "metadata" / "theme_state.json")
+    ensure_data_directories()
+
+    csv = (
+        "age,bmi,children,charges,region\n"
+        "19,27.9,0,16884.92,southwest\n"
+        "32,33.0,1,4449.46,southeast\n"
+        "45,28.0,2,21984.47,southeast\n"
+        "50,29.5,1,11674.13,northeast\n"
+        "36,26.1,3,7250.55,northwest\n"
+    )
+    try:
+        client = TestClient(app)
+        upload = client.post("/upload", files={"file": ("insurance.csv", csv.encode("utf-8"), "text/csv")})
+        assert upload.status_code == 200
+        dataset_id = upload.json()["dataset_id"]
+
+        regional = client.get(f"/intelligence/{dataset_id}/regional")
+        assert regional.status_code == 200
+        body = regional.json()
+        assert body["dimension"] == "region"
+        assert body["metric"] == "charges"
+        assert body["aggregation"] == "average"
+        assert body["regional_title"] == "Average Charges by Region"
+        assert all(kpi["label"] in {"Highest Cost Region", "Lowest Cost Region", "Highest Risk Region"} for kpi in body["regional_kpis"])
+        assert re.search(r"\bage\b", body["regional_insights"][0]["insight"].lower()) is None
+        assert body["regional_kpis"][0]["region"] == body["regional_kpis"][2]["region"]
+
+        override = client.get(f"/intelligence/{dataset_id}/regional", params={"metric": "age", "aggregation": "median"})
+        assert override.status_code == 200
+        override_body = override.json()
+        assert override_body["metric"] == "age"
+        assert override_body["aggregation"] == "median"
     finally:
         shutil.rmtree(test_root, ignore_errors=True)
