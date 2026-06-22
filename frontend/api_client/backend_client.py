@@ -122,13 +122,28 @@ class BackendClient:
         dataset_id: str,
         report_format: str,
         chart_ids: list[str] | None = None,
+        kpi_ids: list[str] | None = None,
         package: str = "executive",
     ) -> bytes:
         path = endpoints.REPORT_EXPORT.format(dataset_id=dataset_id)
         params: list[tuple[str, str]] = [("format", report_format), ("package", package)]
         for chart_id in chart_ids or []:
             params.append(("chart_ids", chart_id))
+        for kpi_id in kpi_ids or []:
+            params.append(("kpi_ids", kpi_id))
         response = requests.get(self._url(path), params=params, timeout=60)
+        response.raise_for_status()
+        return response.content
+
+    def clean_dataset(self, dataset_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        path = endpoints.DATASET_CLEAN.format(dataset_id=dataset_id)
+        response = requests.post(self._url(path), json=payload, timeout=120)
+        response.raise_for_status()
+        return response.json()
+
+    def download_cleaned_dataset(self, dataset_id: str, filename: str) -> bytes:
+        path = endpoints.DATASET_CLEAN_DOWNLOAD.format(dataset_id=dataset_id)
+        response = requests.get(self._url(path), params={"filename": filename}, timeout=120)
         response.raise_for_status()
         return response.content
 

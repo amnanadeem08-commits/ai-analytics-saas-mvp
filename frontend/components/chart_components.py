@@ -123,7 +123,12 @@ def render_time_trends(dashboard: dict) -> None:
         st.line_chart(trend_df.set_index("period"))
 
 
-def render_plotly_chart_specs(dashboard: dict) -> None:
+def render_plotly_chart_specs(
+    dashboard: dict,
+    *,
+    on_add_to_storyboard=None,
+    on_add_to_report=None,
+) -> None:
     chart_specs = dashboard.get("chart_specs", [])
     if not chart_specs:
         st.info("No chart-ready column combinations were detected. Add numeric, categorical, or date fields to generate visuals.")
@@ -144,4 +149,12 @@ def render_plotly_chart_specs(dashboard: dict) -> None:
                 if metadata.get("metric_suitability"):
                     suitability = metadata["metric_suitability"]
                     st.caption(f"Metric rule: {suitability.get('reason', '')}")
-
+                if metadata.get("statistical_explanation"):
+                    st.caption(metadata["statistical_explanation"])
+                actions = st.columns([1, 1])
+                if actions[0].button("➕ Storyboard", key=f"dashboard_chart_story_{chart.get('chart_id')}", use_container_width=True):
+                    if callable(on_add_to_storyboard):
+                        on_add_to_storyboard(chart)
+                if actions[1].button("📌 Report", key=f"dashboard_chart_report_{chart.get('chart_id')}", use_container_width=True):
+                    if callable(on_add_to_report):
+                        on_add_to_report(chart)

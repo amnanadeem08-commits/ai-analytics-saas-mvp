@@ -71,3 +71,40 @@ class DatasetPreviewResponse(BaseModel):
     columns: list[str]
     rows: list[dict[str, Any]]
     preview_row_count: int = Field(..., description="Number of rows returned in preview.")
+
+
+class CleaningOptions(BaseModel):
+    normalize_casing: str = Field(default="lower", pattern="^(lower|upper|title|none)$")
+    numeric_missing_strategy: str = Field(default="median", pattern="^(mean|median|mode|drop_rows)$")
+    categorical_missing_strategy: str = Field(default="mode", pattern="^(mode|unknown|drop_rows)$")
+    datetime_missing_strategy: str = Field(default="manual", pattern="^(manual|ffill|bfill)$")
+    high_missing_unknown_threshold: float = Field(default=0.2, ge=0.0, le=1.0)
+    outlier_strategy: str = Field(default="keep", pattern="^(keep|cap|remove)$")
+    outlier_method: str = Field(default="iqr", pattern="^(iqr|zscore)$")
+    outlier_zscore_threshold: float = Field(default=3.0, ge=1.0, le=6.0)
+
+
+class CleaningChange(BaseModel):
+    column: str
+    action: str
+    method: str
+    count: int
+
+
+class DatasetCleaningResponse(BaseModel):
+    dataset_id: str
+    cleaned_filename_csv: str
+    cleaned_filename_xlsx: str
+    rows_before: int
+    rows_after: int
+    columns_before: int
+    columns_after: int
+    duplicates_removed: int
+    fully_empty_rows_removed: int
+    fully_empty_columns_removed: int
+    completeness_before_pct: float
+    completeness_after_pct: float
+    high_missing_columns: list[str]
+    outlier_flags: dict[str, int]
+    changes: list[CleaningChange]
+    preview_rows: list[dict[str, Any]]

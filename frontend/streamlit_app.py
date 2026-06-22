@@ -243,7 +243,12 @@ def _apply_branding_theme() -> None:
             --ui-accent: {branding['accent_color']};
             --ui-accent-strong: #6366F1;
         }}
-        html, body, [class*="st-"] {{ font-family: var(--brand-font); }}
+        html, body, .stApp, .stMarkdown, .stDataFrame, .stButton button, .stTextInput input, .stSelectbox div {{
+            font-family: var(--brand-font);
+        }}
+        span.material-symbols-rounded, span.material-symbols-outlined {{
+            font-family: "Material Symbols Rounded", "Material Symbols Outlined" !important;
+        }}
         .chart-card-pill {{ color: var(--brand-primary) !important; border-color: var(--brand-primary) !important; }}
         .ai-hero-card {{ background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary)) !important; }}
         .ai-badge-blue {{ color: var(--brand-primary) !important; border-color: var(--brand-primary) !important; }}
@@ -255,7 +260,7 @@ def _apply_branding_theme() -> None:
             color: var(--text-color); background: color-mix(in srgb, var(--brand-primary) 12%, transparent); border: 1px solid color-mix(in srgb, var(--brand-primary) 22%, transparent);
             font-size: .78rem; font-weight: 700;
         }}
-        .rag-box {{ border-left: 5px solid {accent}; padding: .85rem 1rem; border-radius: 14px; background: rgba(255,255,255,.82); }}
+        .rag-box {{ border-left: 5px solid var(--brand-accent); padding: .85rem 1rem; border-radius: 14px; background: rgba(255,255,255,.82); }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -690,6 +695,78 @@ def render_dataset_overview(client: BackendClient) -> None:
             _render_local_dataset_workbench(local_dataset["dataframe"], local_dataset["filename"], branding)
 
 
+def render_data_cleaning(client: BackendClient) -> None:
+    st.header("Data Cleaning")
+    st.caption("Apply transparent cleaning rules and download a cleaned copy without modifying the original upload.")
+    dataset_id = select_dataset(client, key="data_cleaning_dataset_select")
+    if not dataset_id:
+        return
+
+    with st.form("data_cleaning_form"):
+        col1, col2, col3 = st.columns(3)
+        normalize_casing = col1.selectbox("Categorical casing", ["lower", "title", "upper", "none"], index=0)
+        numeric_missing_strategy = col1.selectbox("Numeric missing values", ["median", "mean", "mode", "drop_rows"], index=0)
+        categorical_missing_strategy = col2.selectbox("Categorical missing values", ["mode", "unknown", "drop_rows"], index=0)
+        datetime_missing_strategy = col2.selectbox("Datetime missing values", ["manual", "ffill", "bfill"], index=0)
+        outlier_method = col3.selectbox("Outlier method", ["iqr", "zscore"], index=0)
+        outlier_strategy = col3.selectbox("Outlier handling", ["keep", "cap", "remove"], index=0)
+        high_missing_unknown_threshold = st.slider("High-missing threshold for 'Unknown' label", 0.05, 0.95, 0.20, 0.05)
+        outlier_zscore_threshold = st.slider("Z-score threshold", 1.0, 6.0, 3.0, 0.5)
+        run_cleaning = st.form_submit_button("Apply Cleaning Rules", use_container_width=True, type="primary")
+
+    if not run_cleaning:
+        return
+
+    payload = {
+        "normalize_casing": normalize_casing,
+        "numeric_missing_strategy": numeric_missing_strategy,
+        "categorical_missing_strategy": categorical_missing_strategy,
+        "datetime_missing_strategy": datetime_missing_strategy,
+        "high_missing_unknown_threshold": high_missing_unknown_threshold,
+        "outlier_strategy": outlier_strategy,
+        "outlier_method": outlier_method,
+        "outlier_zscore_threshold": outlier_zscore_threshold,
+    }
+    try:
+        result = client.clean_dataset(dataset_id, payload)
+    except requests.RequestException as exc:
+        st.error(f"Data cleaning failed: {exc}")
+        return
+
+    st.success("Cleaning completed. Review the impact summary below before downloading.")
+    summary_cols = st.columns(4)
+    summary_cols[0].metric("Rows", f"{result['rows_before']:,} → {result['rows_after']:,}")
+    summary_cols[1].metric("Columns", f"{result['columns_before']:,} → {result['columns_after']:,}")
+    summary_cols[2].metric("Completeness", f"{result['completeness_before_pct']}% → {result['completeness_after_pct']}%")
+    summary_cols[3].metric("Duplicates removed", f"{result['duplicates_removed']:,}")
+    if result.get("high_missing_columns"):
+        st.warning("High-missing columns (reviewed, not silently dropped): " + ", ".join(result["high_missing_columns"]))
+    if result.get("outlier_flags"):
+        st.info("Outliers flagged by column: " + ", ".join(f"{col}: {count}" for col, count in result["outlier_flags"].items()))
+    st.subheader("Cleaning Change Log")
+    st.dataframe(pd.DataFrame(result.get("changes", [])), use_container_width=True, hide_index=True)
+    st.subheader("Cleaned Preview")
+    st.dataframe(pd.DataFrame(result.get("preview_rows", [])), use_container_width=True)
+
+    csv_bytes = client.download_cleaned_dataset(dataset_id, result["cleaned_filename_csv"])
+    xlsx_bytes = client.download_cleaned_dataset(dataset_id, result["cleaned_filename_xlsx"])
+    dl_cols = st.columns(2)
+    dl_cols[0].download_button(
+        "Download cleaned CSV",
+        data=csv_bytes,
+        file_name=result["cleaned_filename_csv"],
+        mime="text/csv",
+        use_container_width=True,
+    )
+    dl_cols[1].download_button(
+        "Download cleaned Excel",
+        data=xlsx_bytes,
+        file_name=result["cleaned_filename_xlsx"],
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+
 def _build_filter_payload(schema: dict, key_prefix: str) -> dict:
     filters: dict = {}
     options = schema.get("filters", {})
@@ -852,7 +929,24 @@ def _kpi_icon_svg(icon: str) -> str:
     return f'<svg class="kpi-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">{path}</svg>'
 
 
-def _render_kpi_cards(cards: list[dict], theme: dict | None = None) -> None:
+def _safe_trend_text(value: str | None) -> str:
+    candidate = (value or "").strip()
+    if candidate.startswith("_") or candidate.startswith(":material"):
+        return ""
+    return candidate
+
+
+def _kpi_id_from_label(label: str) -> str:
+    return str(label or "metric").lower().replace(" ", "_").replace("/", "_")
+
+
+def _render_kpi_cards(
+    cards: list[dict],
+    theme: dict | None = None,
+    *,
+    on_add_to_storyboard=None,
+    on_add_to_report=None,
+) -> None:
     if not cards:
         return
     theme = theme or {}
@@ -885,6 +979,10 @@ def _render_kpi_cards(cards: list[dict], theme: dict | None = None) -> None:
             min-height: 198px;
             background: var(--kpi-surface);
             box-shadow: var(--kpi-shadow);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            overflow: visible;
         }
         .kpi-topline {
             display: flex;
@@ -967,7 +1065,8 @@ def _render_kpi_cards(cards: list[dict], theme: dict | None = None) -> None:
             if card.get("format") == "percent" and isinstance(value, (int, float)):
                 value = f"{value}%"
             delta = card.get("delta_percentage")
-            delta_text = "No prior comparison" if delta is None else f"{card.get('trend_arrow', '->')} {delta}%"
+            trend_arrow = _safe_trend_text(str(card.get("trend_arrow", "->")))
+            delta_text = "No prior comparison" if delta is None else f"{trend_arrow} {delta}%".strip()
             color = card.get("status_color") or muted
             context = card.get("business_context") or card.get("description") or ""
             sparkline = _sparkline_html(card.get("sparkline", []))
@@ -995,10 +1094,19 @@ def _render_kpi_cards(cards: list[dict], theme: dict | None = None) -> None:
                     <div class="kpi-decision"><b>Reason:</b> {reason}</div>
                     <div class="kpi-decision"><b>Action:</b> {action}</div>
                     <div class="kpi-decision"><b>Impact:</b> {impact}</div>
+                    <div class="kpi-decision">{card.get("statistical_explanation", "")}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
+            kpi_id = card.get("kpi_id") or _kpi_id_from_label(card.get("label", "Metric"))
+            action_cols = col.columns([1, 1])
+            if action_cols[0].button("➕ Storyboard", key=f"dashboard_kpi_story_{kpi_id}", use_container_width=True):
+                if callable(on_add_to_storyboard):
+                    on_add_to_storyboard(card)
+            if action_cols[1].button("📌 Report", key=f"dashboard_kpi_report_{kpi_id}", use_container_width=True):
+                if callable(on_add_to_report):
+                    on_add_to_report(card)
 
 
 def _render_dashboard_header(dashboard: dict, summary: dict) -> None:
@@ -1143,11 +1251,68 @@ def render_dashboard(client: BackendClient) -> None:
         st.warning(f"Could not load analytics right now: {exc}")
         return
 
+    storyboard_key = f"dashboard_studio_storyboard_{dataset_id}"
+
+    def _add_dashboard_chart_to_storyboard(chart: dict) -> None:
+        storyboard = st.session_state.setdefault(storyboard_key, [])
+        result = add_storyboard_entry(
+            storyboard,
+            {
+                "chart_id": chart.get("chart_id"),
+                "title": chart.get("title", "Dashboard Chart"),
+                "suggested_chart_type": chart.get("chart_type", "chart"),
+                "business_meaning": chart.get("metadata", {}).get("statistical_explanation", ""),
+                "short_ai_insight": chart.get("metadata", {}).get("subtitle", ""),
+                "spec": {
+                    "chart_type": chart.get("chart_type"),
+                    "dimension": chart.get("columns", [None])[0],
+                    "measure": chart.get("columns", [None, None])[1] if len(chart.get("columns", [])) > 1 else None,
+                    "aggregation": chart.get("metadata", {}).get("aggregation", "sum"),
+                    "title": chart.get("title"),
+                },
+            },
+        )
+        if result["added"]:
+            st.success(f"Added {chart.get('title', 'chart')} to Storyboard.")
+        else:
+            st.info("This chart is already in Storyboard.")
+
+    def _add_dashboard_kpi_to_storyboard(card: dict) -> None:
+        storyboard = st.session_state.setdefault(storyboard_key, [])
+        kpi_id = card.get("kpi_id") or _kpi_id_from_label(card.get("label", "Metric"))
+        result = add_storyboard_entry(
+            storyboard,
+            {
+                "chart_id": f"kpi_{kpi_id}",
+                "kpi_id": kpi_id,
+                "title": card.get("label", "KPI"),
+                "suggested_chart_type": "kpi",
+                "business_meaning": card.get("statistical_explanation", ""),
+                "short_ai_insight": card.get("reason", ""),
+                "spec": {"chart_type": "kpi", "title": card.get("label"), "value": card.get("value"), "kpi_id": kpi_id},
+            },
+        )
+        if result["added"]:
+            st.success(f"Added KPI {card.get('label', 'Metric')} to Storyboard.")
+        else:
+            st.info("This KPI is already in Storyboard.")
+
+    def _add_dashboard_chart_to_report(chart: dict) -> None:
+        try:
+            response = client.register_visual(dataset_id, chart)
+            st.success("Added to Reports catalog." if response.get("registered") else "Already available in Reports.")
+        except requests.RequestException as exc:
+            st.warning(f"Could not add chart to Reports: {exc}")
+
     _render_dashboard_header(dashboard, summary)
     render_summary_metrics(summary)
     _render_dashboard_preview(preview.get("rows", []))
     _render_business_summary(dashboard, insights_payload)
-    _render_kpi_cards(dashboard.get("kpi_cards", []), dashboard.get("theme", {}))
+    _render_kpi_cards(
+        dashboard.get("kpi_cards", []),
+        dashboard.get("theme", {}),
+        on_add_to_storyboard=_add_dashboard_kpi_to_storyboard,
+    )
 
     if dashboard.get("filtered"):
         st.caption(
@@ -1171,7 +1336,11 @@ def render_dashboard(client: BackendClient) -> None:
             st.dataframe(missing_df, use_container_width=True)
 
     st.subheader("Visual Analysis")
-    render_plotly_chart_specs(dashboard)
+    render_plotly_chart_specs(
+        dashboard,
+        on_add_to_storyboard=_add_dashboard_chart_to_storyboard,
+        on_add_to_report=_add_dashboard_chart_to_report,
+    )
 
     left, right = st.columns(2)
     with left:
@@ -1712,6 +1881,7 @@ def render_export_downloads(
     client: BackendClient,
     dataset_id: str,
     chart_ids: list[str] | None = None,
+    kpi_ids: list[str] | None = None,
     package: str = "executive",
     label_prefix: str = "",
 ) -> None:
@@ -1719,10 +1889,16 @@ def render_export_downloads(
         params: list[tuple[str, str]] = [("format", report_format), ("package", package)]
         for chart_id in chart_ids or []:
             params.append(("chart_ids", chart_id))
+        for kpi_id in kpi_ids or []:
+            params.append(("kpi_ids", kpi_id))
         return f"{client.base_url}/report/{dataset_id}/export?{urlencode(params)}"
 
     selected_count = len(chart_ids or [])
-    target = "complete dashboard" if not chart_ids else f"{selected_count} selected visual{'s' if selected_count != 1 else ''}"
+    kpi_count = len(kpi_ids or [])
+    if not chart_ids and not kpi_ids:
+        target = "complete dashboard"
+    else:
+        target = f"{selected_count} visual{'s' if selected_count != 1 else ''} and {kpi_count} KPI{'s' if kpi_count != 1 else ''}"
     st.markdown(f"**Download exports for {target}**")
     st.caption(
         "Click one format to generate and download it. Large PDF/PPTX exports may take a moment, but the page will not time out."
@@ -2502,7 +2678,9 @@ def render_storyboard_builder(client: BackendClient) -> None:
         recommendation = current.get("why_useful") or "Use this slide to guide the next management discussion."
 
         spec = current.get("spec", {})
-        if layout_mode not in {"Summary only", "Table only"} and spec.get("dimension"):
+        if spec.get("chart_type") == "kpi":
+            st.metric(spec.get("title", "KPI"), spec.get("value", "—"))
+        elif layout_mode not in {"Summary only", "Table only"} and spec.get("dimension"):
             try:
                 visual = client.render_visual(dataset_id, spec)
                 chart = visual.get("chart", {})
@@ -2522,6 +2700,20 @@ def render_storyboard_builder(client: BackendClient) -> None:
             summary_cols[2].markdown("**Recommendation**")
             summary_cols[2].write(recommendation)
         st.caption(f"Page {st.session_state[slide_key] + 1} of {slide_count}")
+
+    storyboard_chart_ids = [item.get("chart_id") for item in visuals if item.get("chart_id") and not str(item.get("chart_id")).startswith("kpi_")]
+    storyboard_kpi_ids = [item.get("kpi_id") for item in visuals if item.get("kpi_id")]
+    with st.container(border=True):
+        st.subheader("Storyboard Export")
+        st.caption("Export only visuals currently in this storyboard while preserving active branding.")
+        render_export_downloads(
+            client,
+            dataset_id,
+            chart_ids=storyboard_chart_ids,
+            kpi_ids=storyboard_kpi_ids,
+            package="board",
+            label_prefix="Storyboard",
+        )
 
 
 def render_location_insights(client: BackendClient) -> None:
@@ -2560,6 +2752,7 @@ def main() -> None:
         "Navigation",
         [
             "Dataset Preview",
+            "Data Cleaning",
             "Stats Dashboard",
             "AI Insights",
             "Dashboard Studio",
@@ -2573,6 +2766,8 @@ def main() -> None:
 
     if page == "Dataset Preview":
         render_dataset_overview(client)
+    elif page == "Data Cleaning":
+        render_data_cleaning(client)
     elif page == "Stats Dashboard":
         render_dashboard(client)
     elif page == "AI Insights":

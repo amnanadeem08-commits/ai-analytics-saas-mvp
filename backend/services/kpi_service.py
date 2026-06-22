@@ -7,6 +7,7 @@ import pandas as pd
 from backend.core.theme_manager import theme_manager
 from backend.processing.column_detector import detect_column_types
 from backend.services.metric_suitability_service import aggregate_label, aggregate_series, metric_suitability, select_primary_metric
+from backend.services.statistical_explanation_service import build_kpi_explanation
 from backend.utils.response_utils import to_json_safe
 
 
@@ -187,6 +188,22 @@ def compute_kpi_cards(df: pd.DataFrame) -> list[dict[str, Any]]:
             business_context="Share of populated cells after cleaning.",
         ),
     ]
+    cards[0]["statistical_explanation"] = build_kpi_explanation(
+        label="Total rows",
+        formula="a count of records",
+        sample_size=int(len(df)),
+    )
+    cards[1]["statistical_explanation"] = build_kpi_explanation(
+        label="Total columns",
+        formula="a count of variables",
+        sample_size=int(len(df.columns)),
+    )
+    cards[2]["statistical_explanation"] = build_kpi_explanation(
+        label="Data completeness",
+        formula="non-missing cells ÷ total cells",
+        sample_size=int(total_cells),
+        is_rate=True,
+    )
 
     metric_candidates = [
         column for column in numeric_columns if metric_suitability(column, df[column])["is_valid_metric"]
@@ -250,6 +267,13 @@ def compute_kpi_cards(df: pd.DataFrame) -> list[dict[str, Any]]:
             "total": to_json_safe(total),
             "average": to_json_safe(average),
         }
+        cards[-1]["statistical_explanation"] = build_kpi_explanation(
+            label=f"{aggregate_name.title()} {pretty}",
+            formula=f"{aggregate_name} of {pretty}",
+            sample_size=int(series.count()),
+            is_rate=cards[-1]["format"] == "percent",
+            series=series,
+        )
         cards.append(
             _format_card(
                 f"Average {pretty}",
@@ -263,6 +287,12 @@ def compute_kpi_cards(df: pd.DataFrame) -> list[dict[str, Any]]:
         cards[-1]["recommended_action"] = f"Monitor outliers and segment-level variance before using average {pretty} for targets."
         cards[-1]["expected_impact"] = "Better segment targeting can improve planning accuracy and reduce blended-average bias."
         cards[-1]["evidence"] = {"records": int(series.count()), "min": to_json_safe(series.min()), "max": to_json_safe(series.max())}
+        cards[-1]["statistical_explanation"] = build_kpi_explanation(
+            label=f"Average {pretty}",
+            formula=f"mean of {pretty}",
+            sample_size=int(series.count()),
+            series=series,
+        )
 
     for column in categorical_columns[:2]:
         counts = df[column].value_counts(dropna=True)
@@ -284,6 +314,11 @@ def compute_kpi_cards(df: pd.DataFrame) -> list[dict[str, Any]]:
         cards[-1]["recommended_action"] = f"Use {top_value} as the baseline segment for comparison."
         cards[-1]["expected_impact"] = "Segment baselines help leadership focus follow-up analysis on meaningful differences."
         cards[-1]["evidence"] = {"segment": top_value, "records": int(counts.iloc[0])}
+        cards[-1]["statistical_explanation"] = build_kpi_explanation(
+            label=f"Top {_pretty_name(column)}",
+            formula=f"mode of {column}",
+            sample_size=int(counts.sum()),
+        )
 
     return cards[:10]
 

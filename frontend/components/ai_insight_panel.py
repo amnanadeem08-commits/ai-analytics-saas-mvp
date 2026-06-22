@@ -49,6 +49,10 @@ def _css() -> None:
             box-shadow: 0 4px 12px rgba(0,0,0,0.04);
             text-align: center;
             min-height: 120px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 4px;
         }
         .ai-metric-icon { font-size: 1.3rem; margin-bottom: 4px; }
         .ai-metric-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }

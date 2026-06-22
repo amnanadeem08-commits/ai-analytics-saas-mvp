@@ -5,7 +5,7 @@ import shutil
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from backend.core.config import ensure_data_directories, settings
 from backend.core.theme_manager import theme_manager
@@ -754,5 +754,92 @@ def test_studio_storyboard_add_assigns_order_and_prevents_duplicate(monkeypatch)
         # Current behavior: duplicate adds return existing entry and do not update order/sequence.
         assert storyboard[0]["sequence"] == 1
         assert storyboard[0]["order"] == 1
+    finally:
+        shutil.rmtree(test_root, ignore_errors=True)
+
+
+def test_data_cleaning_endpoint_produces_non_destructive_downloads(monkeypatch):
+    test_root = Path("data") / "test_runs" / uuid4().hex
+    monkeypatch.setattr(settings, "DATA_DIR", test_root)
+    monkeypatch.setattr(settings, "UPLOADS_DIR", test_root / "uploads")
+    monkeypatch.setattr(settings, "PROCESSED_DIR", test_root / "processed")
+    monkeypatch.setattr(settings, "METADATA_DIR", test_root / "metadata")
+    monkeypatch.setattr(settings, "DATASETS_DIR", test_root / "datasets")
+    monkeypatch.setattr(settings, "SAMPLES_DIR", test_root / "samples")
+    monkeypatch.setattr(settings, "BRAND_ASSETS_DIR", test_root / "branding")
+    monkeypatch.setattr(settings, "DATASETS_METADATA_FILE", test_root / "metadata" / "datasets.json")
+    monkeypatch.setattr(settings, "BRANDING_FILE", test_root / "metadata" / "branding.json")
+    monkeypatch.setattr(settings, "SQL_QUERIES_FILE", test_root / "metadata" / "sql_queries.json")
+    monkeypatch.setattr(settings, "THEME_STATE_FILE", test_root / "metadata" / "theme_state.json")
+    ensure_data_directories()
+
+    try:
+        client = TestClient(app)
+        upload = client.post(
+            "/upload",
+            files={"file": ("dirty.csv", b"region,sales,date\n North ,100,2024-01-01\nNorth,,2024-01-02\nnorth,5000,\n", "text/csv")},
+        )
+        assert upload.status_code == 200
+        dataset_id = upload.json()["dataset_id"]
+
+        clean = client.post(
+            f"/datasets/{dataset_id}/clean",
+            json={
+                "normalize_casing": "lower",
+                "numeric_missing_strategy": "median",
+                "categorical_missing_strategy": "mode",
+                "datetime_missing_strategy": "manual",
+                "outlier_strategy": "cap",
+                "outlier_method": "iqr",
+            },
+        )
+        assert clean.status_code == 200
+        body = clean.json()
+        assert body["rows_after"] <= body["rows_before"]
+        assert body["completeness_after_pct"] >= body["completeness_before_pct"]
+        assert body["cleaned_filename_csv"].endswith(".csv")
+        assert body["cleaned_filename_xlsx"].endswith(".xlsx")
+
+        csv_download = client.get(f"/datasets/{dataset_id}/clean/download", params={"filename": body["cleaned_filename_csv"]})
+        xlsx_download = client.get(f"/datasets/{dataset_id}/clean/download", params={"filename": body["cleaned_filename_xlsx"]})
+        assert csv_download.status_code == 200
+        assert xlsx_download.status_code == 200
+        assert b"region,sales,date" in csv_download.content
+        assert xlsx_download.content.startswith(b"PK")
+    finally:
+        shutil.rmtree(test_root, ignore_errors=True)
+
+
+def test_excel_export_contains_dashboard_summary_raw_data_schema_and_chart_object(monkeypatch):
+    test_root = Path("data") / "test_runs" / uuid4().hex
+    monkeypatch.setattr(settings, "DATA_DIR", test_root)
+    monkeypatch.setattr(settings, "UPLOADS_DIR", test_root / "uploads")
+    monkeypatch.setattr(settings, "PROCESSED_DIR", test_root / "processed")
+    monkeypatch.setattr(settings, "METADATA_DIR", test_root / "metadata")
+    monkeypatch.setattr(settings, "DATASETS_DIR", test_root / "datasets")
+    monkeypatch.setattr(settings, "SAMPLES_DIR", test_root / "samples")
+    monkeypatch.setattr(settings, "BRAND_ASSETS_DIR", test_root / "branding")
+    monkeypatch.setattr(settings, "DATASETS_METADATA_FILE", test_root / "metadata" / "datasets.json")
+    monkeypatch.setattr(settings, "BRANDING_FILE", test_root / "metadata" / "branding.json")
+    monkeypatch.setattr(settings, "SQL_QUERIES_FILE", test_root / "metadata" / "sql_queries.json")
+    monkeypatch.setattr(settings, "THEME_STATE_FILE", test_root / "metadata" / "theme_state.json")
+    ensure_data_directories()
+    theme_manager.set_active("power_bi_professional")
+
+    try:
+        client = TestClient(app)
+        upload = client.post(
+            "/upload",
+            files={"file": ("sales_chart.csv", b"region,sales\nNorth,100\nSouth,150\nEast,90\n", "text/csv")},
+        )
+        assert upload.status_code == 200
+        dataset_id = upload.json()["dataset_id"]
+        xlsx_export = client.get(f"/report/{dataset_id}/export", params={"format": "xlsx"})
+        assert xlsx_export.status_code == 200
+        workbook = load_workbook(BytesIO(xlsx_export.content))
+        assert "Dashboard Summary" in workbook.sheetnames
+        assert "Raw Data" in workbook.sheetnames
+        assert "Column Schema" in workbook.sheetnames
+        assert len(workbook["Dashboard Summary"]._charts) >= 1
     finally:
         shutil.rmtree(test_root, ignore_errors=True)
