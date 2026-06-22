@@ -19,6 +19,7 @@ from urllib.parse import urlencode, urlparse
 
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.io as pio
 import requests
 import streamlit as st
 
@@ -163,9 +164,9 @@ DEFAULT_BRANDING = {
     "report_subtitle": "Upload a dataset to generate board-ready KPIs, charts, and insights.",
     "footer_note": "",
     "logo_url": "",
-    "primary_color": "#118DFF",
-    "secondary_color": "#12239E",
-    "accent_color": "#E66C37",
+    "primary_color": "var(--brand-primary)",
+    "secondary_color": "var(--brand-secondary)",
+    "accent_color": "var(--brand-accent)",
     "theme_name": "power_bi_professional",
 }
 
@@ -181,10 +182,84 @@ def initialize_session_state(initial_branding: dict | None = None) -> None:
     st.session_state.setdefault("primary_color", branding.get("primary_color", "#118DFF"))
     st.session_state.setdefault("secondary_color", branding.get("secondary_color", "#12239E"))
     st.session_state.setdefault("background_color", "#F5F7FA")
-    st.session_state.setdefault("chart_palette", ["#0078D4", "#004E8C", "#00B7C3", "#F2C811", "#107C10"])
+    st.session_state.setdefault("chart_palette", [branding["primary_color"], branding["secondary_color"], branding["accent_color"]])
 
     if st.session_state.get("active_dataset_id") and not st.session_state.get("selected_dataset_id"):
         st.session_state["selected_dataset_id"] = st.session_state["active_dataset_id"]
+
+def _sync_branding_state(branding: dict, palette: list[str] | None = None, background: str | None = None) -> None:
+    merged = {**DEFAULT_BRANDING, **branding}
+    resolved_palette = list(palette or st.session_state.get("chart_palette", []))
+    if not resolved_palette:
+        resolved_palette = [merged["primary_color"], merged["secondary_color"], merged["accent_color"]]
+    for color in [merged["primary_color"], merged["secondary_color"], merged["accent_color"]]:
+        if color not in resolved_palette:
+            resolved_palette.append(color)
+    st.session_state["branding"] = merged
+    st.session_state["selected_theme"] = merged.get("theme_name", "power_bi_professional")
+    st.session_state["primary_color"] = merged["primary_color"]
+    st.session_state["secondary_color"] = merged["secondary_color"]
+    st.session_state["background_color"] = background or st.session_state.get("background_color", "#F5F7FA")
+    st.session_state["chart_palette"] = resolved_palette
+
+
+def _apply_branding_theme() -> None:
+    branding = st.session_state.get("branding", DEFAULT_BRANDING)
+    palette = st.session_state.get("chart_palette") or [
+        branding["primary_color"], branding["secondary_color"], branding["accent_color"]
+    ]
+    template_name = "ai_analytics_brand"
+    pio.templates[template_name] = go.layout.Template(
+        layout={
+            "font": {"family": "Inter, Segoe UI, Arial", "color": "#172033"},
+            "colorway": palette,
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "rgba(0,0,0,0)",
+        }
+    )
+    pio.templates.default = template_name
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --brand-primary: {branding['primary_color']};
+            --brand-secondary: {branding['secondary_color']};
+            --brand-accent: {branding['accent_color']};
+            --brand-font: Inter, Segoe UI, Arial, sans-serif;
+            --ui-surface: {st.session_state.get("background_color", "#F5F7FA")};
+            --text-color: #0F172A;
+            --text-subtle: #475569;
+            --text-muted: #64748B;
+            --text-muted-soft: #94A3B8;
+            --surface-border: #E2E8F0;
+            --ui-success: #059669;
+            --ui-success-strong: #10B981;
+            --ui-info: {branding['primary_color']};
+            --ui-info-strong: {branding['secondary_color']};
+            --ui-warning: #D97706;
+            --ui-warning-strong: #F59E0B;
+            --ui-danger: #DC2626;
+            --ui-danger-strong: #EF4444;
+            --ui-accent: {branding['accent_color']};
+            --ui-accent-strong: #6366F1;
+        }}
+        html, body, [class*="st-"] {{ font-family: var(--brand-font); }}
+        .chart-card-pill {{ color: var(--brand-primary) !important; border-color: var(--brand-primary) !important; }}
+        .ai-hero-card {{ background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary)) !important; }}
+        .ai-badge-blue {{ color: var(--brand-primary) !important; border-color: var(--brand-primary) !important; }}
+        .ai-card-title {{ color: var(--text-muted); font-size: .78rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }}
+        .ai-card-value {{ color: var(--text-color); font-size: 1.55rem; font-weight: 900; margin-top: .25rem; }}
+        .ai-card-caption {{ color: var(--text-subtle); font-size: .86rem; margin-top: .35rem; line-height: 1.35; }}
+        .evidence-pill {{
+            display: inline-block; padding: .28rem .55rem; border-radius: 999px; margin: .12rem;
+            color: var(--text-color); background: color-mix(in srgb, var(--brand-primary) 12%, transparent); border: 1px solid color-mix(in srgb, var(--brand-primary) 22%, transparent);
+            font-size: .78rem; font-weight: 700;
+        }}
+        .rag-box {{ border-left: 5px solid {accent}; padding: .85rem 1rem; border-radius: 14px; background: rgba(255,255,255,.82); }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 def _render_palette_swatches(palette: list[str]) -> str:
     """Render inline colour swatch HTML for a palette."""
@@ -211,8 +286,8 @@ def render_theme_selector(client: BackendClient) -> None:
                 padding:6px 8px;
                 margin:2px 0;
                 border-radius:6px;
-                border:1px solid {'#118DFF' if is_active else 'transparent'};
-                background:{'rgba(17,141,255,0.06)' if is_active else 'transparent'};
+                border:1px solid {('var(--brand-primary)' if is_active else 'transparent')};
+                background:{('color-mix(in srgb, var(--brand-primary) 8%, transparent)' if is_active else 'transparent')};
                 cursor:pointer;
                 font-size:0.85rem;
             ">
@@ -220,7 +295,7 @@ def render_theme_selector(client: BackendClient) -> None:
                     <span>{swatches}</span>
                     <span style="font-weight:{600 if is_active else 400};">{preset['display_name']}</span>
                 </div>
-                <div style="font-size:0.7rem;color:#64748B;margin-top:2px;">{preset['description']}</div>
+                <div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px;">{preset['description']}</div>
             </div>
             """,
             unsafe_allow_html=True,
@@ -240,7 +315,7 @@ def render_theme_selector(client: BackendClient) -> None:
                     "theme_name": preset["name"],
                 }
             )
-            st.session_state["branding"] = current_branding
+            _sync_branding_state(current_branding, preset["palette"], preset["background"])
             try:
                 applied_theme = client.set_active_theme(preset["name"])
                 st.session_state["primary_color"] = applied_theme.get("primary", preset["palette"][0])
@@ -255,7 +330,7 @@ def render_theme_selector(client: BackendClient) -> None:
                         "theme_name": preset["name"],
                     }
                 )
-                st.session_state["branding"] = current_branding
+                _sync_branding_state(current_branding, applied_theme.get("palette", preset["palette"]), applied_theme.get("background"))
                 client.update_branding(
                     {
                         "primary_color": current_branding["primary_color"],
@@ -324,11 +399,11 @@ def render_branding_editor(client: BackendClient, branding: dict) -> None:
                 "secondary_color": secondary_color,
                 "accent_color": accent_color,
             }
-            st.session_state["branding"] = {**st.session_state.get("branding", DEFAULT_BRANDING), **branding_payload}
+            _sync_branding_state({**st.session_state.get("branding", DEFAULT_BRANDING), **branding_payload})
             try:
                 client.update_branding(branding_payload)
                 if logo_file is not None:
-                    st.session_state["branding"] = client.upload_logo(logo_file)
+                    _sync_branding_state(client.upload_logo(logo_file))
                 st.rerun()
             except requests.RequestException as exc:
                 st.warning(f"Could not save branding right now: {exc}")
@@ -344,7 +419,7 @@ def render_branding_editor(client: BackendClient, branding: dict) -> None:
                 "accent_color": "#E66C37",
                 "theme_name": "power_bi_professional",
             }
-            st.session_state["branding"] = {**DEFAULT_BRANDING, **reset_payload}
+            _sync_branding_state({**DEFAULT_BRANDING, **reset_payload}, ["#0078D4", "#004E8C", "#00B7C3", "#F2C811", "#107C10"], "#F5F7FA")
             try:
                 client.update_branding(reset_payload)
                 st.rerun()
@@ -538,47 +613,38 @@ def _render_local_dataset_workbench(df: pd.DataFrame, filename: str, branding: d
 def render_dataset_upload_area(client: BackendClient) -> None:
     with st.container(border=True):
         st.subheader("Upload CSV Dataset")
-        st.caption("Upload data here. Logo upload lives only in Branding Settings.")
+        st.caption("Files are streamed to the backend and validated against the 200 MB limit.")
         uploaded_file = st.file_uploader("Choose a CSV or Excel file", type=["csv", "xlsx", "xlsm"], key="dataset_upload_main")
         if uploaded_file is None:
             return
 
-        st.caption(f"Selected file: {uploaded_file.name}")
-        if st.button("Upload and Preview Dataset", type="primary", use_container_width=True):
-            try:
-                local_df = _read_uploaded_dataframe(uploaded_file)
-                local_dataset_id = f"local::{uploaded_file.name}"
-                local_dataset = {"dataset_id": local_dataset_id, "original_filename": uploaded_file.name, "dataframe": local_df}
-                st.session_state["uploaded_datasets"][local_dataset_id] = local_dataset
-                st.session_state["active_dataset_id"] = local_dataset_id
-                st.session_state["selected_dataset_id"] = local_dataset_id
-                st.session_state["active_dataframe"] = local_df
-                st.session_state["local_uploaded_dataset"] = {"filename": uploaded_file.name, "dataframe": local_df}
-            except Exception as exc:
-                st.warning(f"Could not preview this file locally. Check that it is a valid CSV or Excel file. Details: {exc}")
-                return
-
+        size_mb = uploaded_file.size / 1024 / 1024
+        st.caption(f"Selected file: {uploaded_file.name} ({size_mb:.1f} MB)")
+        if st.button("Upload and Analyze Dataset", type="primary", use_container_width=True):
             if not ensure_backend_available(client):
-                st.info("The local preview is ready. The backend is still starting, so server upload will become available in a moment.")
+                st.error("Backend is offline. Start the backend on port 8000, then retry; the file was not analyzed locally.")
                 return
-
             try:
-                result = client.upload_csv(uploaded_file)
+                with st.spinner("Streaming file to the backend and analyzing it..."):
+                    result = client.upload_csv(uploaded_file)
                 st.success(result.get("message", "Dataset uploaded."))
                 backend_dataset_id = result["dataset_id"]
                 st.session_state["uploaded_datasets"][backend_dataset_id] = {
                     "dataset_id": backend_dataset_id,
                     "original_filename": uploaded_file.name,
-                    "dataframe": local_df,
                 }
                 st.session_state["active_dataset_id"] = backend_dataset_id
                 st.session_state["selected_dataset_id"] = backend_dataset_id
-                st.session_state["active_dataframe"] = local_df
+                st.session_state.pop("active_dataframe", None)
+                st.session_state.pop("local_uploaded_dataset", None)
                 st.rerun()
+            except requests.Timeout:
+                st.error("Upload timed out while the backend was processing the file. The backend may still be working; check its logs before retrying.")
             except requests.RequestException as exc:
-                st.info(f"Backend upload is unavailable right now, so the local preview is shown instead. Details: {exc}")
-
-
+                st.error(str(exc))
+                if getattr(exc, "response", None) is not None:
+                    st.code(exc.response.text, language="json")
+                st.caption("No local-preview fallback was used; analytics remain on the last successfully registered dataset.")
 def render_dataset_overview(client: BackendClient) -> None:
     st.header("Dataset Preview")
     branding = st.session_state.get("branding", DEFAULT_BRANDING)
@@ -790,10 +856,10 @@ def _render_kpi_cards(cards: list[dict], theme: dict | None = None) -> None:
     if not cards:
         return
     theme = theme or {}
-    surface = theme.get("surface", "#FFFFFF")
-    border = theme.get("border", "#D7DEE8")
-    muted = theme.get("muted_text", "#64748B")
-    text = theme.get("text", "#111827")
+    surface = theme.get("surface", "var(--ui-surface)")
+    border = theme.get("border", "var(--surface-border)")
+    muted = theme.get("muted_text", "var(--text-muted)")
+    text = theme.get("text", "var(--text-color)")
     shadow = "0 10px 24px rgba(15, 23, 42, 0.06)" if theme.get("mode") != "dark" else "0 10px 24px rgba(0, 0, 0, 0.28)"
     st.markdown(
         f"""
@@ -1146,12 +1212,12 @@ def _ai_dashboard_css(primary: str, secondary: str, accent: str) -> None:
             box-shadow: 0 12px 34px rgba(15,23,42,.08);
             min-height: 116px;
         }}
-        .ai-card-title {{ color: #64748B; font-size: .78rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }}
-        .ai-card-value {{ color: #0F172A; font-size: 1.55rem; font-weight: 900; margin-top: .25rem; }}
-        .ai-card-caption {{ color: #475569; font-size: .86rem; margin-top: .35rem; line-height: 1.35; }}
+        .ai-card-title {{ color: var(--text-muted); font-size: .78rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }}
+        .ai-card-value {{ color: var(--text-color); font-size: 1.55rem; font-weight: 900; margin-top: .25rem; }}
+        .ai-card-caption {{ color: var(--text-subtle); font-size: .86rem; margin-top: .35rem; line-height: 1.35; }}
         .evidence-pill {{
             display: inline-block; padding: .28rem .55rem; border-radius: 999px; margin: .12rem;
-            color: #0F172A; background: rgba(14,165,233,.11); border: 1px solid rgba(14,165,233,.22);
+            color: var(--text-color); background: color-mix(in srgb, var(--brand-primary) 12%, transparent); border: 1px solid color-mix(in srgb, var(--brand-primary) 22%, transparent);
             font-size: .78rem; font-weight: 700;
         }}
         .rag-box {{ border-left: 5px solid {accent}; padding: .85rem 1rem; border-radius: 14px; background: rgba(255,255,255,.82); }}
@@ -1161,7 +1227,7 @@ def _ai_dashboard_css(primary: str, secondary: str, accent: str) -> None:
     )
 
 
-def _html_card(title: str, value: str | int | float, caption: str = "", color: str = "#118DFF") -> None:
+def _html_card(title: str, value: str | int | float, caption: str = "", color: str = "var(--brand-primary)") -> None:
     st.markdown(
         f"""
         <div class="ai-card" style="border-top: 5px solid {color};">
@@ -1953,7 +2019,7 @@ def render_presentation_mode(client: BackendClient) -> None:
     slide = slides[index]
     branding = report.get("branding", {})
     theme = report.get("theme", {})
-    primary = branding.get("primary_color", theme.get("primary", "#0078D4"))
+    primary = branding.get("primary_color", theme.get("primary", "var(--brand-primary)"))
 
     st.markdown(
         f"""
@@ -1962,8 +2028,8 @@ def render_presentation_mode(client: BackendClient) -> None:
             min-height: 620px;
             border-radius: 10px;
             padding: 38px 44px;
-            background: {theme.get('surface', '#FFFFFF')};
-            border: 1px solid {theme.get('border', '#D9E0EA')};
+            background: {theme.get('surface', 'var(--ui-surface)')};
+            border: 1px solid {theme.get('border', 'var(--surface-border)')};
             box-shadow: 0 18px 42px rgba(15, 23, 42, 0.10);
         }}
         .presentation-title {{
@@ -1973,11 +2039,11 @@ def render_presentation_mode(client: BackendClient) -> None:
             margin-bottom: 8px;
         }}
         .presentation-subtitle {{
-            color: {theme.get('muted_text', '#5F6B7A')};
+            color: {theme.get('muted_text', 'var(--text-muted)')};
             margin-bottom: 28px;
         }}
         .presentation-body {{
-            color: {theme.get('text', '#1B1F23')};
+            color: {theme.get('text', 'var(--text-color)')};
             font-size: 1.05rem;
             line-height: 1.55;
             margin-bottom: 14px;
@@ -2479,6 +2545,7 @@ def main() -> None:
     else:
         initialize_session_state()
     branding = st.session_state["branding"]
+    _apply_branding_theme()
 
     st.title(branding.get("company_name", "AI Analytics SaaS MVP"))
     st.caption(branding.get("report_title", "Executive Decision Intelligence Report"))

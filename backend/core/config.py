@@ -7,7 +7,7 @@ class Settings:
 
     APP_NAME: str = os.getenv("APP_NAME", "AI Analytics SaaS MVP")
     API_VERSION: str = "0.1.0"
-    MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "25"))
+    MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "200"))
 
     ROOT_DIR: Path = Path(__file__).resolve().parents[2]
     DATA_DIR: Path = ROOT_DIR / "data"

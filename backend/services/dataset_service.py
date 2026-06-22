@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from functools import lru_cache
+from pathlib import Path
+
 import pandas as pd
 
 from backend.core.constants import DEFAULT_PREVIEW_ROWS, MAX_PREVIEW_ROWS
-from backend.storage.dataset_registry import load_dataset_record
-from backend.storage.local_storage import load_processed_dataframe
 from backend.storage.metadata_store import get_dataset, list_datasets
 from backend.utils.response_utils import dataframe_preview
 
@@ -17,11 +18,33 @@ def get_dataset_metadata(dataset_id: str) -> dict:
     return get_dataset(dataset_id)
 
 
+@lru_cache(maxsize=8)
+def _load_dataset_dataframe_cached(
+    dataset_id: str,
+    file_hash: str,
+    parquet_path: str,
+    processed_path: str,
+) -> pd.DataFrame:
+    if parquet_path and Path(parquet_path).exists():
+        dataframe = pd.read_parquet(parquet_path)
+    else:
+        dataframe = pd.read_csv(processed_path)
+    dataframe.attrs["_dataset_cache_key"] = f"{dataset_id}:{file_hash}"
+    return dataframe
+
+
 def load_dataset_dataframe(dataset_id: str) -> pd.DataFrame:
     metadata = get_dataset(dataset_id)
-    if metadata.get("parquet_path"):
-        return load_dataset_record(dataset_id).dataframe
-    return load_processed_dataframe(metadata["processed_filename"])
+    return _load_dataset_dataframe_cached(
+        dataset_id,
+        metadata.get("file_hash", ""),
+        metadata.get("parquet_path") or "",
+        metadata.get("processed_path") or "",
+    )
+
+
+def clear_dataset_cache() -> None:
+    _load_dataset_dataframe_cached.cache_clear()
 
 
 def get_dataset_status(dataset_id: str) -> dict:
@@ -38,10 +61,6 @@ def get_dataset_status(dataset_id: str) -> dict:
 def get_dataset_overview(dataset_id: str) -> dict:
     metadata = get_dataset(dataset_id)
     overview = metadata.get("overview") or {}
-    if not overview:
-        record = load_dataset_record(dataset_id)
-        overview = record.overview
-
     return {
         "dataset_id": dataset_id,
         "original_filename": metadata["original_filename"],

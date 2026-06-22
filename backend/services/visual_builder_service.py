@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import lru_cache
+
 from typing import Any
 
 import pandas as pd
@@ -343,6 +345,7 @@ def build_slicer_recommendations(schema: list[dict[str, Any]], filters: dict[str
     return sorted(slicers, key=lambda item: (-item["priority"], item["field"]))[:8]
 
 
+@lru_cache(maxsize=16)
 def discover_visual_builder_schema(dataset_id: str) -> dict[str, Any]:
     df = load_dataset_dataframe(dataset_id)
     row_count = int(len(df))

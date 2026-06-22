@@ -24,6 +24,8 @@ data/branding/*
 
 data/vector_store/
 data/rag_indexes/
+output/
+tmp/
 
 data/vector_store/
 data/rag_indexes/

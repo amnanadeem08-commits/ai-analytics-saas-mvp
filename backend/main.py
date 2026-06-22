@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -13,6 +15,12 @@ from backend.api.routes.theme_routes import router as theme_router
 from backend.api.routes.upload_routes import router as upload_router
 from backend.api.routes.visual_builder_routes import router as visual_builder_router
 from backend.core.config import ensure_data_directories, settings
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 
 
 def create_app() -> FastAPI:

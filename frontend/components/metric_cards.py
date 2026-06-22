@@ -32,7 +32,7 @@ def render_summary_metrics(summary: dict) -> None:
         }
         .summary-label {
             font-size: 0.72rem;
-            color: #64748B;
+            color: var(--text-muted);
             font-weight: 700;
             text-transform: uppercase;
         }

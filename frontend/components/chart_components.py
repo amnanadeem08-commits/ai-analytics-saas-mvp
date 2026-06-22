@@ -81,9 +81,9 @@ def inject_chart_styles() -> None:
         .chart-card-pill {
             font-size: 0.68rem;
             font-weight: 700;
-            color: #2563EB;
-            background: rgba(37, 99, 235, 0.08);
-            border: 1px solid rgba(37, 99, 235, 0.18);
+            color: var(--brand-primary);
+            background: color-mix(in srgb, var(--brand-primary) 8%, transparent);
+            border: 1px solid var(--brand-primary);
             border-radius: 999px;
             padding: 4px 9px;
             white-space: nowrap;

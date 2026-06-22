@@ -26,15 +26,24 @@ class BackendClient:
         return response.json()
 
     def upload_csv(self, uploaded_file) -> dict[str, Any]:
-        files = {
-            "file": (
-                uploaded_file.name,
-                uploaded_file.getvalue(),
-                "text/csv",
+        suffix = os.path.splitext(uploaded_file.name)[1].lower()
+        content_type = (
+            "text/csv"
+            if suffix == ".csv"
+            else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        uploaded_file.seek(0)
+        files = {"file": (uploaded_file.name, uploaded_file, content_type)}
+        response = requests.post(self._url(endpoints.UPLOAD), files=files, timeout=(10, 600))
+        if not response.ok:
+            try:
+                detail = response.json().get("detail", response.text)
+            except ValueError:
+                detail = response.text
+            raise requests.HTTPError(
+                f"Backend rejected the upload ({response.status_code}): {detail}",
+                response=response,
             )
-        }
-        response = requests.post(self._url(endpoints.UPLOAD), files=files, timeout=60)
-        response.raise_for_status()
         return response.json()
 
     def list_datasets(self) -> list[dict[str, Any]]:

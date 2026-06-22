@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import pandas as pd
+from threading import Lock
+
+_PROFILE_CACHE: dict[str, dict] = {}
+_PROFILE_CACHE_LOCK = Lock()
 
 from backend.processing.column_detector import detect_column_types
 from backend.utils.response_utils import safe_dict, to_json_safe
@@ -156,6 +160,12 @@ def build_quality_score(row_count: int, column_count: int, missing_total: int, d
 
 def profile_dataframe(df: pd.DataFrame) -> dict:
     """Return a compact but useful dataset profile."""
+    cache_key = df.attrs.get("_dataset_cache_key")
+    if cache_key:
+        with _PROFILE_CACHE_LOCK:
+            cached = _PROFILE_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
     column_types = detect_column_types(df)
     missing_by_column = {column: int(count) for column, count in df.isna().sum().items()}
     dtypes = {column: str(dtype) for column, dtype in df.dtypes.items()}
@@ -182,4 +192,10 @@ def profile_dataframe(df: pd.DataFrame) -> dict:
         result["duplicate_rows"],
     )
 
-    return safe_dict(result)
+    safe_result = safe_dict(result)
+    if cache_key:
+        with _PROFILE_CACHE_LOCK:
+            if len(_PROFILE_CACHE) >= 16:
+                _PROFILE_CACHE.pop(next(iter(_PROFILE_CACHE)))
+            _PROFILE_CACHE[cache_key] = safe_result
+    return safe_result

@@ -19,9 +19,12 @@ def _semantic_type(column: str, column_types: dict[str, list[str]]) -> str:
     return "text"
 
 
-def build_column_schema(df: pd.DataFrame) -> list[dict[str, Any]]:
+def build_column_schema(
+    df: pd.DataFrame,
+    column_types: dict[str, list[str]] | None = None,
+) -> list[dict[str, Any]]:
     """Build a compact column schema for downstream analytics services."""
-    column_types = detect_column_types(df)
+    column_types = column_types or detect_column_types(df)
     schema: list[dict[str, Any]] = []
 
     for column in df.columns:
@@ -44,8 +47,11 @@ def build_column_schema(df: pd.DataFrame) -> list[dict[str, Any]]:
     return schema
 
 
-def build_column_groups(df: pd.DataFrame) -> dict[str, list[str]]:
-    column_types = detect_column_types(df)
+def build_column_groups(
+    df: pd.DataFrame,
+    column_types: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]]:
+    column_types = column_types or detect_column_types(df)
     return {
         "numeric": column_types["numeric_columns"],
         "categorical": column_types["categorical_columns"],
