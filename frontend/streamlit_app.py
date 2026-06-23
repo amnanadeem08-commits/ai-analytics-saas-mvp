@@ -145,8 +145,9 @@ def render_backend_status(client: BackendClient) -> None:
             raise requests.RequestException(st.session_state.get("backend_autostart_error", "Backend unavailable"))
         health = client.health()
         st.sidebar.success(f"Backend connected: {health.get('version', '')}")
+        st.session_state["local_mode_notice"] = False
     except requests.RequestException:
-        st.sidebar.warning("Backend offline. Local CSV preview still works.")
+        st.sidebar.info(LOCAL_MODE_INFO_MESSAGE)
         if st.session_state.get("backend_autostart_error"):
             st.sidebar.caption(st.session_state["backend_autostart_error"])
 
@@ -171,6 +172,8 @@ DEFAULT_BRANDING = {
     "theme_name": "power_bi_professional",
 }
 
+LOCAL_MODE_INFO_MESSAGE = "Backend unavailable — running local Streamlit analysis mode."
+
 
 def initialize_session_state(initial_branding: dict | None = None) -> None:
     """Keep app state stable across navigation, uploads, and theme changes."""
@@ -184,6 +187,7 @@ def initialize_session_state(initial_branding: dict | None = None) -> None:
     st.session_state.setdefault("secondary_color", branding.get("secondary_color", "#12239E"))
     st.session_state.setdefault("background_color", "#F5F7FA")
     st.session_state.setdefault("chart_palette", [branding["primary_color"], branding["secondary_color"], branding["accent_color"]])
+    st.session_state.setdefault("local_mode_notice", False)
 
     if st.session_state.get("active_dataset_id") and not st.session_state.get("selected_dataset_id"):
         st.session_state["selected_dataset_id"] = st.session_state["active_dataset_id"]
@@ -616,10 +620,87 @@ def _render_local_dataset_workbench(df: pd.DataFrame, filename: str, branding: d
     _render_local_chart_builder(df, palette)
 
 
+def _register_local_uploaded_dataset(uploaded_file) -> bool:
+    try:
+        with st.spinner("Backend unavailable. Reading file locally with pandas..."):
+            local_df = _read_uploaded_dataframe(uploaded_file)
+    except Exception as exc:
+        st.error(f"Local fallback failed: {exc}")
+        return False
+
+    local_dataset_id = f"local::{int(time.time() * 1000)}"
+    st.session_state["uploaded_datasets"][local_dataset_id] = {
+        "dataset_id": local_dataset_id,
+        "original_filename": uploaded_file.name,
+    }
+    st.session_state["active_dataset_id"] = local_dataset_id
+    st.session_state["selected_dataset_id"] = local_dataset_id
+    st.session_state["active_dataframe"] = local_df
+    st.session_state["local_uploaded_dataset"] = {
+        "filename": uploaded_file.name,
+        "dataframe": local_df,
+    }
+    st.session_state["local_mode_notice"] = True
+    st.info(LOCAL_MODE_INFO_MESSAGE)
+    return True
+
+
+def _local_active_dataframe() -> pd.DataFrame | None:
+    active_df = st.session_state.get("active_dataframe")
+    if isinstance(active_df, pd.DataFrame) and not active_df.empty:
+        return active_df
+    local_dataset = st.session_state.get("local_uploaded_dataset")
+    if isinstance(local_dataset, dict):
+        local_df = local_dataset.get("dataframe")
+        if isinstance(local_df, pd.DataFrame) and not local_df.empty:
+            return local_df
+    return None
+
+
+def _detect_regional_column(df: pd.DataFrame) -> str | None:
+    preferred_tokens = ("region", "country", "state", "province", "city", "territory", "market")
+    for column in df.columns:
+        lowered = str(column).lower()
+        if any(token in lowered for token in preferred_tokens):
+            return column
+    non_numeric = [col for col in df.columns if not pd.api.types.is_numeric_dtype(df[col])]
+    return non_numeric[0] if non_numeric else None
+
+
+def _detect_metric_column(df: pd.DataFrame) -> str | None:
+    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    return numeric_cols[0] if numeric_cols else None
+
+
+def _local_report_downloads(df: pd.DataFrame, dataset_id: str) -> None:
+    json_bytes = json.dumps(_local_summary(df), indent=2).encode("utf-8")
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    xlsx_buffer = io.BytesIO()
+    df.to_excel(xlsx_buffer, index=False)
+    xlsx_bytes = xlsx_buffer.getvalue()
+
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    col1.download_button("Download JSON", data=json_bytes, file_name=f"{dataset_id}_report.json", mime="application/json", use_container_width=True)
+    col2.download_button("Download CSV", data=csv_bytes, file_name=f"{dataset_id}.csv", mime="text/csv", use_container_width=True)
+    col3.button("Download PDF", disabled=True, use_container_width=True)
+    col4.button("Download PPTX", disabled=True, use_container_width=True)
+    col5.download_button(
+        "Download Excel",
+        data=xlsx_bytes,
+        file_name=f"{dataset_id}_executive_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+    col6.button("Download PNG", disabled=True, use_container_width=True)
+    st.caption("PDF/PPTX/PNG exports require the backend service. CSV/Excel/JSON are available in local Streamlit analysis mode.")
+
+
 def render_dataset_upload_area(client: BackendClient) -> None:
     with st.container(border=True):
         st.subheader("Upload CSV Dataset")
-        st.caption("Files are streamed to the backend and validated against the 200 MB limit.")
+        st.caption("Files are sent to the backend when available; if not, they are read locally for dashboard analysis.")
+        if st.session_state.get("local_mode_notice"):
+            st.info(LOCAL_MODE_INFO_MESSAGE)
         uploaded_file = st.file_uploader("Choose a CSV or Excel file", type=["csv", "xlsx", "xlsm"], key="dataset_upload_main")
         if uploaded_file is None:
             return
@@ -628,7 +709,8 @@ def render_dataset_upload_area(client: BackendClient) -> None:
         st.caption(f"Selected file: {uploaded_file.name} ({size_mb:.1f} MB)")
         if st.button("Upload and Analyze Dataset", type="primary", use_container_width=True):
             if not ensure_backend_available(client):
-                st.error("Backend is offline. Start the backend on port 8000, then retry; the file was not analyzed locally.")
+                if _register_local_uploaded_dataset(uploaded_file):
+                    st.rerun()
                 return
             try:
                 with st.spinner("Streaming file to the backend and analyzing it..."):
@@ -643,14 +725,16 @@ def render_dataset_upload_area(client: BackendClient) -> None:
                 st.session_state["selected_dataset_id"] = backend_dataset_id
                 st.session_state.pop("active_dataframe", None)
                 st.session_state.pop("local_uploaded_dataset", None)
+                st.session_state["local_mode_notice"] = False
                 st.rerun()
             except requests.Timeout:
-                st.error("Upload timed out while the backend was processing the file. The backend may still be working; check its logs before retrying.")
+                if _register_local_uploaded_dataset(uploaded_file):
+                    st.rerun()
             except requests.RequestException as exc:
-                st.error(str(exc))
-                if getattr(exc, "response", None) is not None:
-                    st.code(exc.response.text, language="json")
-                st.caption("No local-preview fallback was used; analytics remain on the last successfully registered dataset.")
+                if not _register_local_uploaded_dataset(uploaded_file):
+                    st.error(str(exc))
+                    if getattr(exc, "response", None) is not None:
+                        st.code(exc.response.text, language="json")
 def render_dataset_overview(client: BackendClient) -> None:
     st.header("Dataset Preview")
     branding = st.session_state.get("branding", DEFAULT_BRANDING)
@@ -1240,6 +1324,22 @@ def render_dashboard(client: BackendClient) -> None:
     if not dataset_id:
         return
 
+    if str(dataset_id).startswith("local::"):
+        local_df = _local_active_dataframe()
+        if local_df is None:
+            st.info("Upload a dataset first from Dataset Preview.")
+            return
+        st.info(LOCAL_MODE_INFO_MESSAGE)
+        summary = _local_summary(local_df)
+        render_summary_metrics(summary)
+        numeric_columns = local_df.select_dtypes(include="number").columns.tolist()
+        _render_local_kpis(local_df, numeric_columns)
+        palette = st.session_state.get("chart_palette", ["#0078D4", "#004E8C", "#F2C811", "#10B981", "#F97316"])
+        _render_local_chart_builder(local_df, palette)
+        with st.expander("Dataset preview", expanded=False):
+            st.dataframe(local_df.head(20), use_container_width=True)
+        return
+
     try:
         summary = client.get_summary(dataset_id)
         preview = client.get_preview(dataset_id, rows=8)
@@ -1457,8 +1557,25 @@ def render_ai_insights(client: BackendClient) -> None:
         st.info("Upload a dataset first from Dataset Preview.")
         return
     if str(dataset_id).startswith("local::"):
-        st.info("Upload a dataset first from Dataset Preview.")
-        st.caption("Local preview data is still available in Dataset Preview. Start the backend and upload the dataset there to generate AI insights.")
+        local_df = _local_active_dataframe()
+        if local_df is None:
+            st.info("Upload a dataset first from Dataset Preview.")
+            return
+        st.info(LOCAL_MODE_INFO_MESSAGE)
+        summary = _local_summary(local_df)
+        numeric_cols = local_df.select_dtypes(include="number").columns.tolist()
+        with st.container(border=True):
+            st.markdown("#### Local Insight Summary")
+            st.write(f"Rows analyzed: {summary['row_count']:,}")
+            st.write(f"Columns analyzed: {summary['column_count']:,}")
+            st.write(f"Missing values: {summary['total_missing_values']:,}")
+            st.write(f"Duplicate rows: {summary['duplicate_rows']:,}")
+            if numeric_cols:
+                metric = numeric_cols[0]
+                metric_series = pd.to_numeric(local_df[metric], errors="coerce")
+                st.write(f"Top numeric signal: {metric} total = {metric_series.sum():,.2f}, average = {metric_series.mean():,.2f}")
+            else:
+                st.write("No numeric columns were found for advanced local insight scoring.")
         return
 
     try:
@@ -1965,6 +2082,22 @@ def render_reports(client: BackendClient) -> None:
     if not dataset_id:
         return
 
+    if str(dataset_id).startswith("local::"):
+        local_df = _local_active_dataframe()
+        if local_df is None:
+            st.info("Upload a dataset first from Dataset Preview.")
+            return
+        st.info(LOCAL_MODE_INFO_MESSAGE)
+        summary = _local_summary(local_df)
+        cols = st.columns(3)
+        cols[0].metric("Rows", f"{summary.get('row_count', 0):,}")
+        cols[1].metric("Columns", f"{summary.get('column_count', 0):,}")
+        cols[2].metric("Duplicates", f"{summary.get('duplicate_rows', 0):,}")
+        st.subheader("Export Package")
+        with st.container(border=True):
+            _local_report_downloads(local_df, dataset_id)
+        return
+
     try:
         report = client.get_report(dataset_id)
     except requests.RequestException as exc:
@@ -2271,6 +2404,46 @@ def render_regional_analytics(client: BackendClient, dataset_id: str | None = No
         dataset_id = select_dataset(client, key="regional_analytics_dataset")
         if not dataset_id:
             return
+    if str(dataset_id).startswith("local::"):
+        local_df = _local_active_dataframe()
+        if local_df is None:
+            st.info("Upload a dataset first from Dataset Preview.")
+            return
+        st.info(LOCAL_MODE_INFO_MESSAGE)
+        region_col = _detect_regional_column(local_df)
+        metric_col = _detect_metric_column(local_df)
+        if not region_col:
+            st.info("No geographic fields detected.")
+            st.write("Recommended columns: country, state, province, region, city, territory, postal code, latitude, longitude.")
+            return
+        if metric_col:
+            grouped = local_df.groupby(region_col, dropna=False)[metric_col].sum().reset_index(name="value")
+            metric_label = metric_col
+        else:
+            grouped = local_df.groupby(region_col, dropna=False).size().reset_index(name="value")
+            metric_label = "Record Count"
+        grouped[region_col] = grouped[region_col].astype(str)
+        grouped = grouped.sort_values("value", ascending=False).head(30)
+        st.subheader("Regional Performance")
+        st.dataframe(grouped, use_container_width=True)
+        fig = go.Figure(
+            data=[
+                go.Bar(
+                    x=grouped[region_col],
+                    y=grouped["value"],
+                    marker_color=st.session_state.get("primary_color", "#118DFF"),
+                )
+            ]
+        )
+        fig.update_layout(
+            title=f"Regional {metric_label}",
+            xaxis_title=region_col.replace("_", " ").title(),
+            yaxis_title=metric_label,
+            template="ai_analytics_brand",
+            height=360,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        return
     metric_key = f"regional_metric_{dataset_id}"
     agg_key = f"regional_agg_{dataset_id}"
     try:
@@ -2349,6 +2522,47 @@ def render_geographic_insights(client: BackendClient, dataset_id: str | None = N
         dataset_id = select_dataset(client, key="geographic_insights_dataset")
         if not dataset_id:
             return
+    if str(dataset_id).startswith("local::"):
+        local_df = _local_active_dataframe()
+        if local_df is None:
+            st.info("Upload a dataset first from Dataset Preview.")
+            return
+        st.info(LOCAL_MODE_INFO_MESSAGE)
+        lat_col = next((col for col in local_df.columns if str(col).lower() in {"lat", "latitude"}), None)
+        lon_col = next((col for col in local_df.columns if str(col).lower() in {"lon", "lng", "longitude"}), None)
+        if lat_col and lon_col:
+            geo_df = local_df[[lat_col, lon_col]].dropna().head(1000)
+            if geo_df.empty:
+                st.info("Geographic coordinates are present but no valid rows were found.")
+                return
+            fig = go.Figure(
+                data=[
+                    go.Scattergeo(
+                        lat=geo_df[lat_col],
+                        lon=geo_df[lon_col],
+                        mode="markers",
+                        marker={"size": 6, "color": st.session_state.get("primary_color", "#118DFF")},
+                    )
+                ]
+            )
+            fig.update_layout(height=420, margin={"l": 0, "r": 0, "t": 40, "b": 0}, geo={"showland": True})
+            st.plotly_chart(fig, use_container_width=True)
+            return
+
+        region_col = _detect_regional_column(local_df)
+        if region_col:
+            grouped = local_df.groupby(region_col, dropna=False).size().reset_index(name="value")
+            grouped[region_col] = grouped[region_col].astype(str)
+            grouped = grouped.sort_values("value", ascending=False).head(20)
+            fig = go.Figure(data=[go.Bar(x=grouped[region_col], y=grouped["value"])])
+            fig.update_layout(title="Geographic distribution (approximate)", height=360)
+            st.plotly_chart(fig, use_container_width=True)
+            st.info("No latitude/longitude found. Showing regional visuals; any map-like view is explicitly approximate.")
+            return
+
+        st.info("No geographic fields detected.")
+        st.write("Maps are hidden until location fields are available.")
+        return
     metric_key = f"regional_metric_{dataset_id}"
     agg_key = f"regional_agg_{dataset_id}"
     metric = st.session_state.get(metric_key)
