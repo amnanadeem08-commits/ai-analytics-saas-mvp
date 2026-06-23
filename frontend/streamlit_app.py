@@ -123,7 +123,7 @@ def ensure_backend_available(client: BackendClient) -> bool:
         except OSError as exc:
             st.session_state["backend_autostart_attempted"] = True
             st.session_state["backend_autostart_failed"] = True
-            st.session_state["backend_autostart_error"] = str(exc)
+            st.session_state["backend_autostart_error"] = "Backend unavailable."
             return False
 
     if _wait_for_local_backend():
@@ -135,7 +135,7 @@ def ensure_backend_available(client: BackendClient) -> bool:
             pass
 
     st.session_state["backend_autostart_failed"] = True
-    st.session_state["backend_autostart_error"] = "The local backend did not respond on http://127.0.0.1:8000."
+    st.session_state["backend_autostart_error"] = "Backend unavailable."
     return False
 
 
@@ -148,8 +148,7 @@ def render_backend_status(client: BackendClient) -> None:
         st.session_state["local_mode_notice"] = False
     except requests.RequestException:
         st.sidebar.info(LOCAL_MODE_INFO_MESSAGE)
-        if st.session_state.get("backend_autostart_error"):
-            st.sidebar.caption(st.session_state["backend_autostart_error"])
+
 
 
 THEME_PRESETS = [
@@ -175,10 +174,18 @@ DEFAULT_BRANDING = {
 LOCAL_MODE_INFO_MESSAGE = "Backend unavailable — running local Streamlit analysis mode."
 
 
-def _is_local_dataset_id(dataset_id: str | None) -> bool:
+def is_local_dataset_id(dataset_id: str | None) -> bool:
     if not dataset_id:
         return False
     return str(dataset_id).startswith("local_") or str(dataset_id).startswith("local::")
+
+
+def _is_local_dataset_id(dataset_id: str | None) -> bool:
+    return is_local_dataset_id(dataset_id)
+
+
+def _warn_backend_unavailable(context: str) -> None:
+    st.warning(f"{context} is temporarily unavailable. Local upload preview and dashboards are still available.")
 
 
 def _build_local_dataset_id(filename: str) -> str:
@@ -278,6 +285,23 @@ def _apply_branding_theme() -> None:
             font-size: .78rem; font-weight: 700;
         }}
         .rag-box {{ border-left: 5px solid var(--brand-accent); padding: .85rem 1rem; border-radius: 14px; background: rgba(255,255,255,.82); }}
+        div.stButton > button[kind="primary"], div.stFormSubmitButton > button[kind="primary"] {{
+            background: var(--brand-primary) !important;
+            border-color: var(--brand-primary) !important;
+            color: #FFFFFF !important;
+        }}
+        div.stButton > button, div.stDownloadButton > button {{
+            border-color: color-mix(in srgb, var(--brand-primary) 42%, var(--surface-border)) !important;
+        }}
+        div[data-testid="stMetric"], .ai-card {{
+            border: 1px solid color-mix(in srgb, var(--brand-primary) 24%, var(--surface-border));
+            border-top: 4px solid var(--brand-accent);
+            background: color-mix(in srgb, var(--ui-surface) 88%, #FFFFFF);
+            border-radius: 8px;
+            padding: .75rem;
+        }}
+        div[data-testid="stMetricValue"] {{ color: var(--brand-primary); }}
+        div[data-testid="stMetricDelta"] {{ color: var(--ui-success); }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -291,11 +315,13 @@ def _render_palette_swatches(palette: list[str]) -> str:
 
 def render_theme_selector(client: BackendClient) -> None:
     st.sidebar.markdown("#### Theme Gallery")
+    if st.session_state.pop("theme_apply_message", ""):
+        st.sidebar.success("Theme applied locally for this Streamlit session.")
     payload: dict = {"active_theme": None, "themes": []}
     try:
         payload = client.list_themes()
     except requests.RequestException:
-        st.sidebar.caption("Start the backend to apply saved theme presets.")
+        st.sidebar.caption("Theme presets apply locally; backend sync is unavailable right now.")
 
     active_name = st.session_state.get("selected_theme") or payload.get("active_theme")
 
@@ -361,8 +387,8 @@ def render_theme_selector(client: BackendClient) -> None:
                         "theme_name": preset["name"],
                     }
                 )
-            except requests.RequestException as exc:
-                st.sidebar.error(f"Could not switch theme: {exc}")
+            except requests.RequestException:
+                st.session_state["theme_apply_message"] = "local"
             st.rerun()
 
 
@@ -428,7 +454,7 @@ def render_branding_editor(client: BackendClient, branding: dict) -> None:
                     _sync_branding_state(client.upload_logo(logo_file))
                 st.rerun()
             except requests.RequestException as exc:
-                st.warning(f"Could not save branding right now: {exc}")
+                st.warning("Could not save branding while the backend is unavailable. Session branding was kept locally.")
         if col2.button("Reset", use_container_width=True, key="branding_reset_button"):
             reset_payload = {
                 "company_name": "AI Analytics",
@@ -446,7 +472,7 @@ def render_branding_editor(client: BackendClient, branding: dict) -> None:
                 client.update_branding(reset_payload)
                 st.rerun()
             except requests.RequestException as exc:
-                st.warning(f"Could not reset branding right now: {exc}")
+                st.warning("Could not reset backend branding right now. Session branding was reset locally.")
 
 
 def get_dataset_options(client: BackendClient) -> list[dict]:
@@ -644,6 +670,245 @@ def _render_local_chart_builder(df: pd.DataFrame, palette: list[str]) -> None:
         st.plotly_chart(fig, use_container_width=True)
 
 
+
+def _local_column_groups(df: pd.DataFrame) -> tuple[list[str], list[str], list[str]]:
+    numeric = df.select_dtypes(include="number").columns.tolist()
+    datetime_cols = df.select_dtypes(include=["datetime", "datetimetz"]).columns.tolist()
+    for column in df.columns:
+        if column in numeric or column in datetime_cols:
+            continue
+        parsed = pd.to_datetime(df[column], errors="coerce")
+        if parsed.notna().mean() >= 0.8:
+            datetime_cols.append(column)
+    categorical = [column for column in df.columns if column not in numeric and column not in datetime_cols]
+    return numeric, categorical, datetime_cols
+
+
+def _quality_score(summary: dict) -> tuple[int, str, list[str]]:
+    rows = int(summary.get("row_count", 0) or 0)
+    cols = int(summary.get("column_count", 0) or 0)
+    missing = int(summary.get("total_missing_values", 0) or 0)
+    duplicates = int(summary.get("duplicate_rows", 0) or 0)
+    cells = max(rows * cols, 1)
+    completeness = max(0, 100 - (missing / cells * 100))
+    duplicate_penalty = min(20, (duplicates / max(rows, 1)) * 100)
+    usability_penalty = 8 if cols < 2 else 0
+    score = int(max(0, min(100, round(completeness - duplicate_penalty - usability_penalty))))
+    grade = "A" if score >= 90 else "B" if score >= 80 else "C" if score >= 70 else "D"
+    reasons = [f"Completeness is {completeness:.1f}% across {cols:,} columns."]
+    reasons.append("No duplicate rows detected." if duplicates == 0 else f"{duplicates:,} duplicate rows may need review.")
+    if missing:
+        reasons.append(f"{missing:,} missing cells can reduce confidence in segmented charts.")
+    else:
+        reasons.append("No missing cells detected in this dataset.")
+    return score, grade, reasons[:3]
+
+
+def _render_local_data_quality_score(df: pd.DataFrame, summary: dict) -> None:
+    score, grade, reasons = _quality_score(summary)
+    with st.container(border=True):
+        st.markdown("#### Data Quality Score")
+        cols = st.columns([1, 1, 2])
+        cols[0].metric("Score", f"{score}%")
+        cols[1].metric("Grade", grade)
+        with cols[2]:
+            for reason in reasons:
+                st.write(f"- {reason}")
+
+
+def _local_kpi_cards(df: pd.DataFrame) -> list[dict]:
+    numeric, categorical, _ = _local_column_groups(df)
+    cards: list[dict] = [
+        {"label": "Records", "value": f"{len(df):,}", "description": "Total rows available for analysis.", "icon": "table"},
+        {"label": "Columns", "value": f"{len(df.columns):,}", "description": "Fields available for slicing and measuring.", "icon": "metric"},
+        {"label": "Missing Cells", "value": f"{int(df.isna().sum().sum()):,}", "description": "Blank values that may affect analysis confidence.", "icon": "shield"},
+        {"label": "Duplicates", "value": f"{int(df.duplicated().sum()):,}", "description": "Repeated records detected in the dataset.", "icon": "table"},
+    ]
+    for column in numeric[:4]:
+        series = pd.to_numeric(df[column], errors="coerce")
+        cards.append(
+            {
+                "label": column,
+                "value": f"{series.sum():,.2f}",
+                "description": f"Total {column}; average is {series.mean():,.2f}.",
+                "statistical_explanation": "Use this metric to compare magnitude across segments or time.",
+                "icon": "chart",
+            }
+        )
+    if categorical:
+        column = categorical[0]
+        top = df[column].astype("string").fillna("Unknown").value_counts().head(1)
+        if not top.empty:
+            cards.append({"label": f"Top {column}", "value": str(top.index[0]), "description": f"Most common category with {int(top.iloc[0]):,} records.", "icon": "users"})
+    return cards[:8]
+
+
+def _render_local_key_metrics(df: pd.DataFrame) -> None:
+    st.subheader("Key Metrics")
+    _render_kpi_cards(_local_kpi_cards(df), {"surface": "var(--ui-surface)", "border": "var(--surface-border)", "muted_text": "var(--text-muted)", "text": "var(--text-color)"}, key_prefix="local_dashboard")
+
+
+def _render_local_chart_recommendations(df: pd.DataFrame, palette: list[str]) -> None:
+    st.subheader("Chart Recommendations")
+    numeric, categorical, datetime_cols = _local_column_groups(df)
+    shown = 0
+    cols = st.columns(2)
+    if categorical:
+        column = categorical[0]
+        counts = df[column].astype("string").fillna("Unknown").value_counts().head(12).reset_index()
+        counts.columns = [column, "Records"]
+        fig = go.Figure(data=[go.Bar(x=counts[column], y=counts["Records"], marker_color=palette[: len(counts)])])
+        fig.update_layout(title=f"Records by {column}", height=340, margin={"l": 36, "r": 18, "t": 54, "b": 86})
+        with cols[shown % 2].container(border=True):
+            st.markdown(f"#### Category Concentration: {column}")
+            st.plotly_chart(fig, use_container_width=True)
+        shown += 1
+    if numeric:
+        column = numeric[0]
+        series = pd.to_numeric(df[column], errors="coerce").dropna()
+        fig = go.Figure(data=[go.Histogram(x=series, marker_color=palette[0])])
+        fig.update_layout(title=f"Distribution of {column}", height=340, margin={"l": 36, "r": 18, "t": 54, "b": 54})
+        with cols[shown % 2].container(border=True):
+            st.markdown(f"#### Numeric Distribution: {column}")
+            st.plotly_chart(fig, use_container_width=True)
+        shown += 1
+    if datetime_cols and numeric:
+        date_col, metric = datetime_cols[0], numeric[0]
+        temp = df[[date_col, metric]].copy()
+        temp[date_col] = pd.to_datetime(temp[date_col], errors="coerce")
+        temp[metric] = pd.to_numeric(temp[metric], errors="coerce")
+        trend = temp.dropna().groupby(date_col)[metric].mean().reset_index().sort_values(date_col)
+        if len(trend) >= 2:
+            fig = go.Figure(data=[go.Scatter(x=trend[date_col], y=trend[metric], mode="lines+markers", line={"color": palette[1 % len(palette)]})])
+            fig.update_layout(title=f"Trend of {metric} over {date_col}", height=340, margin={"l": 36, "r": 18, "t": 54, "b": 54})
+            with cols[shown % 2].container(border=True):
+                st.markdown("#### Time Trend")
+                st.plotly_chart(fig, use_container_width=True)
+            shown += 1
+    if shown == 0:
+        st.info("No meaningful chart recommendation is available for the current column mix.")
+
+
+def _render_local_forecast_and_trend(df: pd.DataFrame) -> None:
+    numeric, _, datetime_cols = _local_column_groups(df)
+    left, right = st.columns(2)
+    with left.container(border=True):
+        st.markdown("#### Forecast Predictions")
+        if not datetime_cols or not numeric:
+            st.info("Forecasting requires a date column and a suitable numeric measure.")
+        else:
+            date_col, metric = datetime_cols[0], numeric[0]
+            temp = df[[date_col, metric]].copy()
+            temp[date_col] = pd.to_datetime(temp[date_col], errors="coerce")
+            temp[metric] = pd.to_numeric(temp[metric], errors="coerce")
+            trend = temp.dropna().groupby(date_col)[metric].mean().reset_index().sort_values(date_col)
+            if len(trend) < 4:
+                st.info("Forecasting requires a date column and a suitable numeric measure.")
+            else:
+                y = trend[metric].to_numpy(dtype=float)
+                x = list(range(len(y)))
+                slope = (y[-1] - y[0]) / max(len(y) - 1, 1)
+                projected = y[-1] + slope
+                st.metric(f"Next-period {metric}", f"{projected:,.2f}", f"Trend slope {slope:,.2f}")
+                st.caption("Simple directional projection from observed trend; use as a planning signal, not a formal forecast.")
+    with right.container(border=True):
+        st.markdown("#### Trend Analysis")
+        if numeric:
+            metric = numeric[0]
+            series = pd.to_numeric(df[metric], errors="coerce").dropna()
+            if len(series) >= 4:
+                first = series.head(max(1, len(series)//3)).mean()
+                last = series.tail(max(1, len(series)//3)).mean()
+                change = ((last - first) / abs(first) * 100) if first else 0
+                direction = "increasing" if change > 5 else "decreasing" if change < -5 else "stable"
+                st.write(f"The trend suggests {metric} is **{direction}** across the available row order.")
+                st.caption(f"Average moved from {first:,.2f} to {last:,.2f}; this is associated with a {change:,.1f}% directional change.")
+            else:
+                st.info("Trend analysis needs more numeric records.")
+        else:
+            st.info("Trend analysis requires a numeric measure.")
+
+
+def _local_anomaly_rows(df: pd.DataFrame) -> list[str]:
+    numeric, categorical, _ = _local_column_groups(df)
+    rows: list[str] = []
+    for column in numeric[:6]:
+        series = pd.to_numeric(df[column], errors="coerce").dropna()
+        if len(series) < 4:
+            continue
+        q1, q3 = series.quantile(0.25), series.quantile(0.75)
+        iqr = q3 - q1
+        if iqr > 0:
+            count = int(((series < q1 - 1.5 * iqr) | (series > q3 + 1.5 * iqr)).sum())
+            if count:
+                rows.append(f"{column}: {count:,} records fall outside the IQR range, which may affect averages and totals.")
+    missing = df.isna().sum()
+    for column, count in missing[missing > 0].sort_values(ascending=False).head(3).items():
+        rows.append(f"{column}: {int(count):,} missing values may reduce confidence in segmented analysis.")
+    duplicates = int(df.duplicated().sum())
+    if duplicates:
+        rows.append(f"Duplicate rows: {duplicates:,} repeated records may inflate counts or sums.")
+    for column in categorical[:4]:
+        counts = df[column].astype("string").fillna("Unknown").value_counts(normalize=True)
+        if not counts.empty and counts.iloc[0] >= 0.75 and len(counts) > 1:
+            rows.append(f"{column}: top category represents {counts.iloc[0] * 100:.1f}% of records, suggesting concentration risk.")
+    return rows[:8]
+
+
+def _render_local_anomalies_and_distribution(df: pd.DataFrame) -> None:
+    left, right = st.columns(2)
+    with left.container(border=True):
+        st.markdown("#### Anomalies Detected")
+        anomalies = _local_anomaly_rows(df)
+        if anomalies:
+            for item in anomalies:
+                st.write(f"- {item}")
+        else:
+            st.success("No major statistical anomalies detected in the selected dataset.")
+    with right.container(border=True):
+        st.markdown("#### Distribution Insights")
+        numeric, categorical, _ = _local_column_groups(df)
+        insights: list[str] = []
+        for column in numeric[:3]:
+            series = pd.to_numeric(df[column], errors="coerce").dropna()
+            if len(series) >= 3:
+                skew = series.skew()
+                shape = "right-skewed" if skew > 0.75 else "left-skewed" if skew < -0.75 else "fairly balanced"
+                insights.append(f"{column} is {shape}; median {series.median():,.2f}, average {series.mean():,.2f}.")
+        for column in categorical[:2]:
+            top = df[column].astype("string").fillna("Unknown").value_counts().head(1)
+            if not top.empty:
+                insights.append(f"{column} is concentrated around '{top.index[0]}' with {int(top.iloc[0]):,} records.")
+        if insights:
+            for item in insights[:6]:
+                st.write(f"- {item}")
+        else:
+            st.info("Distribution insights require numeric or categorical fields with enough variation.")
+
+
+def _render_local_executive_summary(df: pd.DataFrame) -> None:
+    numeric, categorical, datetime_cols = _local_column_groups(df)
+    anomalies = _local_anomaly_rows(df)
+    with st.container(border=True):
+        st.markdown("#### Executive Summary")
+        st.write(f"**What happened:** {len(df):,} records across {len(df.columns):,} fields are available for local executive analysis.")
+        risk = anomalies[0] if anomalies else "No major statistical anomalies detected in the selected dataset."
+        st.write(f"**Key risk:** {risk}")
+        opportunity = "Use category segmentation to compare outcomes." if categorical and numeric else "Add categorical and numeric fields to unlock stronger segmentation."
+        if datetime_cols and numeric:
+            opportunity = "Use the detected date and numeric fields for trend monitoring and lightweight forecasting."
+        st.write(f"**Key opportunity:** {opportunity}")
+        st.write("**Recommended next action:** Review the data quality score, then use Dashboard Studio to build one KPI view and one segment comparison.")
+
+
+def _render_local_executive_dashboard(df: pd.DataFrame, summary: dict, palette: list[str]) -> None:
+    render_summary_metrics(summary)
+    _render_local_data_quality_score(df, summary)
+    _render_local_key_metrics(df)
+    _render_local_chart_recommendations(df, palette)
+    _render_local_forecast_and_trend(df)
+    _render_local_anomalies_and_distribution(df)
+    _render_local_executive_summary(df)
 def _render_local_dataset_workbench(df: pd.DataFrame, filename: str, branding: dict) -> None:
     st.success(f"Previewing local dataset: {filename}")
     summary = _local_summary(df)
@@ -676,7 +941,7 @@ def _register_local_uploaded_dataset(uploaded_file) -> bool:
         with st.spinner("Backend unavailable. Reading file locally with pandas..."):
             local_df = _read_uploaded_dataframe(uploaded_file)
     except Exception as exc:
-        st.error(f"Local fallback failed: {exc}")
+        st.error("Local fallback could not read this file. Please check the file format and try again.")
         return False
 
     local_dataset_id = _build_local_dataset_id(uploaded_file.name)
@@ -717,6 +982,186 @@ def _local_active_dataframe(dataset_id: str | None = None) -> pd.DataFrame | Non
     return None
 
 
+def _build_local_visual_schema(df: pd.DataFrame) -> dict:
+    numeric_columns = df.select_dtypes(include="number").columns.tolist()
+    datetime_columns = df.select_dtypes(include=["datetime", "datetimetz"]).columns.tolist()
+    categorical_columns = [
+        column for column in df.columns
+        if column not in numeric_columns and column not in datetime_columns
+    ]
+    semantic_layer = []
+    for column in df.columns:
+        if column in numeric_columns:
+            role = "measure"
+            semantic_type = "numeric"
+        elif column in datetime_columns:
+            role = "date"
+            semantic_type = "datetime"
+        else:
+            role = "dimension"
+            semantic_type = "categorical"
+        semantic_layer.append(
+            {
+                "name": column,
+                "semantic_role": role,
+                "semantic_type": semantic_type,
+                "unique_count": int(df[column].nunique(dropna=True)),
+                "missing_count": int(df[column].isna().sum()),
+            }
+        )
+    dimensions = categorical_columns + datetime_columns or df.columns.tolist()
+    measures = numeric_columns
+    return {
+        "dimensions": [{"name": column} for column in dimensions],
+        "measures": [{"name": column} for column in measures],
+        "datetime_columns": datetime_columns,
+        "categorical_columns": categorical_columns,
+        "numeric_columns": numeric_columns,
+        "row_count": int(len(df)),
+        "column_count": int(len(df.columns)),
+        "semantic_layer": semantic_layer,
+        "filters": {column: {"type": "categorical", "values": sorted(df[column].dropna().astype(str).unique().tolist())[:100]} for column in dimensions},
+        "suggested_defaults": {
+            "dimension": dimensions[0] if dimensions else None,
+            "measure": measures[0] if measures else None,
+            "chart_type": "bar",
+            "aggregation": "sum" if measures else "count",
+        },
+        "recommended_visuals": [],
+    }
+
+
+def _apply_local_cleaning_rules(df: pd.DataFrame, payload: dict) -> tuple[pd.DataFrame, dict]:
+    cleaned = df.copy()
+    rows_before, columns_before = cleaned.shape
+    changes: list[dict] = []
+    duplicates_before = int(cleaned.duplicated().sum())
+    cleaned = cleaned.drop_duplicates()
+
+    numeric_strategy = payload.get("numeric_missing_strategy", "median")
+    categorical_strategy = payload.get("categorical_missing_strategy", "mode")
+    casing = payload.get("normalize_casing", "none")
+
+    for column in cleaned.select_dtypes(include="number").columns:
+        missing = int(cleaned[column].isna().sum())
+        if missing:
+            if numeric_strategy == "drop_rows":
+                cleaned = cleaned.dropna(subset=[column])
+                action = "Dropped rows with missing numeric values"
+            elif numeric_strategy == "mean":
+                cleaned[column] = cleaned[column].fillna(cleaned[column].mean())
+                action = "Filled numeric missing values with mean"
+            elif numeric_strategy == "mode":
+                mode = cleaned[column].mode(dropna=True)
+                cleaned[column] = cleaned[column].fillna(mode.iloc[0] if not mode.empty else 0)
+                action = "Filled numeric missing values with mode"
+            else:
+                cleaned[column] = cleaned[column].fillna(cleaned[column].median())
+                action = "Filled numeric missing values with median"
+            changes.append({"column": column, "change": action, "rows_affected": missing})
+
+        if payload.get("outlier_strategy") in {"cap", "remove"} and cleaned[column].notna().any():
+            q1 = cleaned[column].quantile(0.25)
+            q3 = cleaned[column].quantile(0.75)
+            iqr = q3 - q1
+            if pd.notna(iqr) and iqr > 0:
+                lower = q1 - 1.5 * iqr
+                upper = q3 + 1.5 * iqr
+                mask = (cleaned[column] < lower) | (cleaned[column] > upper)
+                count = int(mask.sum())
+                if count and payload.get("outlier_strategy") == "cap":
+                    cleaned[column] = cleaned[column].clip(lower, upper)
+                    changes.append({"column": column, "change": "Capped IQR outliers", "rows_affected": count})
+                elif count and payload.get("outlier_strategy") == "remove":
+                    cleaned = cleaned.loc[~mask]
+                    changes.append({"column": column, "change": "Removed IQR outlier rows", "rows_affected": count})
+
+    non_numeric = [column for column in cleaned.columns if not pd.api.types.is_numeric_dtype(cleaned[column])]
+    for column in non_numeric:
+        missing = int(cleaned[column].isna().sum())
+        if missing:
+            if categorical_strategy == "drop_rows":
+                cleaned = cleaned.dropna(subset=[column])
+                action = "Dropped rows with missing categorical values"
+            elif categorical_strategy == "unknown":
+                cleaned[column] = cleaned[column].fillna("Unknown")
+                action = "Filled categorical missing values with Unknown"
+            else:
+                mode = cleaned[column].mode(dropna=True)
+                cleaned[column] = cleaned[column].fillna(mode.iloc[0] if not mode.empty else "Unknown")
+                action = "Filled categorical missing values with mode"
+            changes.append({"column": column, "change": action, "rows_affected": missing})
+        if casing in {"lower", "title", "upper"} and cleaned[column].dtype == "object":
+            text = cleaned[column].astype("string")
+            cleaned[column] = getattr(text.str, casing)()
+
+    missing_before = int(df.isna().sum().sum())
+    missing_after = int(cleaned.isna().sum().sum())
+    cells_before = max(rows_before * columns_before, 1)
+    cells_after = max(cleaned.shape[0] * cleaned.shape[1], 1)
+    result = {
+        "rows_before": rows_before,
+        "rows_after": int(cleaned.shape[0]),
+        "columns_before": columns_before,
+        "columns_after": int(cleaned.shape[1]),
+        "completeness_before_pct": round((1 - missing_before / cells_before) * 100, 2),
+        "completeness_after_pct": round((1 - missing_after / cells_after) * 100, 2),
+        "duplicates_removed": duplicates_before,
+        "high_missing_columns": [],
+        "outlier_flags": {},
+        "changes": changes or [{"column": "Dataset", "change": "No missing values or duplicates required changes", "rows_affected": 0}],
+        "preview_rows": cleaned.head(50).to_dict(orient="records"),
+        "cleaned_filename_csv": "local_cleaned_dataset.csv",
+        "cleaned_filename_xlsx": "local_cleaned_dataset.xlsx",
+    }
+    return cleaned, result
+
+
+def _render_local_visual(df: pd.DataFrame, spec: dict) -> dict:
+    dimension = spec.get("dimension")
+    measure = spec.get("measure")
+    aggregation = spec.get("aggregation", "sum")
+    chart_type = spec.get("chart_type", "bar")
+    working = df.copy()
+    if not dimension or dimension not in working.columns:
+        dimension = working.columns[0] if len(working.columns) else None
+    if not dimension:
+        return {"chart": {"title": "Dashboard Visual", "plotly": {"data": [], "layout": {}}, "metadata": {"filtered_rows": 0}}}
+
+    if measure and measure in working.columns:
+        values = pd.to_numeric(working[measure], errors="coerce")
+        working[measure] = values
+        grouped = getattr(working.groupby(dimension, dropna=False)[measure], aggregation if aggregation in {"sum", "mean", "count", "min", "max"} else "sum")().reset_index()
+        value_column = measure
+    else:
+        grouped = working.groupby(dimension, dropna=False).size().reset_index(name="Record Count")
+        value_column = "Record Count"
+    grouped[dimension] = grouped[dimension].astype(str)
+    grouped = grouped.sort_values(value_column, ascending=spec.get("sort") != "ascending").head(30)
+    title = spec.get("title") or f"{value_column} by {dimension}"
+    palette = st.session_state.get("chart_palette", ["#0078D4", "#004E8C", "#00B7C3", "#F2C811"])
+
+    if chart_type == "line":
+        data = [go.Scatter(x=grouped[dimension], y=grouped[value_column], mode="lines+markers", line={"color": palette[0]})]
+    elif chart_type == "pie":
+        data = [go.Pie(labels=grouped[dimension], values=grouped[value_column], hole=0.35, marker={"colors": palette})]
+    elif chart_type == "table":
+        data = [go.Table(header={"values": [dimension, value_column]}, cells={"values": [grouped[dimension], grouped[value_column]]})]
+    else:
+        data = [go.Bar(x=grouped[dimension], y=grouped[value_column], marker={"color": palette[: len(grouped)]})]
+    fig = go.Figure(data=data)
+    fig.update_layout(title=title, height=420, margin={"l": 48, "r": 24, "t": 64, "b": 96})
+    return {
+        "applied_spec": spec,
+        "semantic_warnings": [],
+        "chart": {
+            "chart_id": None,
+            "title": title,
+            "fields": [field for field in [dimension, measure] if field],
+            "plotly": fig.to_dict(),
+            "metadata": {"short_ai_insight": "Local preview generated in this Streamlit session.", "filtered_rows": int(len(grouped))},
+        },
+    }
 def _detect_regional_column(df: pd.DataFrame) -> str | None:
     preferred_tokens = ("region", "country", "state", "province", "city", "territory", "market")
     for column in df.columns:
@@ -792,9 +1237,8 @@ def render_dataset_upload_area(client: BackendClient) -> None:
                     st.rerun()
             except requests.RequestException as exc:
                 if not _register_local_uploaded_dataset(uploaded_file):
-                    st.error(str(exc))
-                    if getattr(exc, "response", None) is not None:
-                        st.code(exc.response.text, language="json")
+                    st.error("Upload could not be processed right now. Local preview and dashboard remain available when the file can be read locally.")
+
 def render_dataset_overview(client: BackendClient) -> None:
     st.header("Dataset Preview")
     branding = st.session_state.get("branding", DEFAULT_BRANDING)
@@ -834,7 +1278,7 @@ def render_dataset_overview(client: BackendClient) -> None:
         st.subheader("Preview")
         st.dataframe(pd.DataFrame(preview["rows"]), use_container_width=True)
     except requests.RequestException as exc:
-        st.warning(f"Could not load backend preview. Showing local preview if available. Details: {exc}")
+        st.warning("Could not load backend preview. Showing local preview if available.")
         local_dataset = st.session_state.get("local_uploaded_dataset")
         if local_dataset:
             _render_local_dataset_workbench(local_dataset["dataframe"], local_dataset["filename"], branding)
@@ -872,12 +1316,25 @@ def render_data_cleaning(client: BackendClient) -> None:
         "outlier_method": outlier_method,
         "outlier_zscore_threshold": outlier_zscore_threshold,
     }
-    try:
-        result = client.clean_dataset(dataset_id, payload)
-    except requests.RequestException as exc:
-        st.error(f"Data cleaning failed: {exc}")
-        return
-
+    local_cleaned_df = None
+    if is_local_dataset_id(dataset_id):
+        local_df = _local_active_dataframe(dataset_id)
+        if local_df is None:
+            st.info("Upload a dataset first from Dataset Preview.")
+            return
+        local_cleaned_df, result = _apply_local_cleaning_rules(local_df, payload)
+        st.session_state["local_dataframes"][dataset_id] = local_cleaned_df
+        st.session_state["active_dataframe"] = local_cleaned_df
+        local_dataset = st.session_state.get("local_uploaded_dataset")
+        if isinstance(local_dataset, dict) and local_dataset.get("dataset_id") == dataset_id:
+            local_dataset["dataframe"] = local_cleaned_df
+        st.success("Cleaning applied locally for this Streamlit session.")
+    else:
+        try:
+            result = client.clean_dataset(dataset_id, payload)
+        except requests.RequestException:
+            st.error("Data cleaning requires the backend connection right now.")
+            return
     st.success("Cleaning completed. Review the impact summary below before downloading.")
     summary_cols = st.columns(4)
     summary_cols[0].metric("Rows", f"{result['rows_before']:,} → {result['rows_after']:,}")
@@ -893,8 +1350,14 @@ def render_data_cleaning(client: BackendClient) -> None:
     st.subheader("Cleaned Preview")
     st.dataframe(pd.DataFrame(result.get("preview_rows", [])), use_container_width=True)
 
-    csv_bytes = client.download_cleaned_dataset(dataset_id, result["cleaned_filename_csv"])
-    xlsx_bytes = client.download_cleaned_dataset(dataset_id, result["cleaned_filename_xlsx"])
+    if local_cleaned_df is not None:
+        csv_bytes = local_cleaned_df.to_csv(index=False).encode("utf-8")
+        xlsx_buffer = io.BytesIO()
+        local_cleaned_df.to_excel(xlsx_buffer, index=False)
+        xlsx_bytes = xlsx_buffer.getvalue()
+    else:
+        csv_bytes = client.download_cleaned_dataset(dataset_id, result["cleaned_filename_csv"])
+        xlsx_bytes = client.download_cleaned_dataset(dataset_id, result["cleaned_filename_xlsx"])
     dl_cols = st.columns(2)
     dl_cols[0].download_button(
         "Download cleaned CSV",
@@ -1130,11 +1593,15 @@ def _render_kpi_cards(
             flex-direction: column;
             gap: 8px;
             overflow: visible;
+            height: auto;
+            overflow-wrap: anywhere;
+            word-break: normal;
         }
         .kpi-topline {
             display: flex;
             align-items: center;
             justify-content: space-between;
+            min-width: 0;
             gap: 8px;
         }
         .kpi-icon {
@@ -1227,21 +1694,21 @@ def _render_kpi_cards(
                 f"""
                 <div class="kpi-card">
                     <div class="kpi-topline">
-                        <div class="kpi-label">{card.get('label', 'Metric')}</div>
+                        <div class="kpi-label">{html.escape(str(card.get('label', 'Metric')))}</div>
                         <div style="color: {color};">{icon}</div>
                     </div>
-                    <div class="kpi-value">{value}</div>
+                    <div class="kpi-value">{html.escape(str(value))}</div>
                     <div class="kpi-delta" style="color: {color};">{delta_text}</div>
                     <div style="color: {color};">{sparkline}</div>
                     <div class="kpi-meta">
                         <span style="color: {color};"><span class="risk-dot"></span>{risk.title()}</span>
                         <span>Confidence {round(float(confidence) * 100)}%</span>
                     </div>
-                    <div class="kpi-context">{context}</div>
-                    <div class="kpi-decision"><b>Reason:</b> {reason}</div>
-                    <div class="kpi-decision"><b>Action:</b> {action}</div>
-                    <div class="kpi-decision"><b>Impact:</b> {impact}</div>
-                    <div class="kpi-decision">{card.get("statistical_explanation", "")}</div>
+                    <div class="kpi-context">{html.escape(str(context))}</div>
+                    <div class="kpi-decision"><b>Reason:</b> {html.escape(str(reason))}</div>
+                    <div class="kpi-decision"><b>Action:</b> {html.escape(str(action))}</div>
+                    <div class="kpi-decision"><b>Impact:</b> {html.escape(str(impact))}</div>
+                    <div class="kpi-decision">{html.escape(str(card.get("statistical_explanation", "")))}</div>
                 </div>
                 """,
                 unsafe_allow_html=True,
@@ -1249,10 +1716,10 @@ def _render_kpi_cards(
             kpi_id = card.get("kpi_id") or _kpi_id_from_label(card.get("label", "Metric"))
             key_suffix = f"{key_prefix}_{kpi_id}_{card_index}"
             action_cols = col.columns([1, 1])
-            if action_cols[0].button("➕ Storyboard", key=f"{key_suffix}_storyboard", use_container_width=True):
+            if action_cols[0].button("Storyboard", key=f"{key_suffix}_storyboard", use_container_width=True):
                 if callable(on_add_to_storyboard):
                     on_add_to_storyboard(card)
-            if action_cols[1].button("📌 Report", key=f"{key_suffix}_report", use_container_width=True):
+            if action_cols[1].button("Report", key=f"{key_suffix}_report", use_container_width=True):
                 if callable(on_add_to_report):
                     on_add_to_report(card)
 
@@ -1391,11 +1858,8 @@ def render_dashboard(client: BackendClient) -> None:
             return
         st.info(LOCAL_MODE_INFO_MESSAGE)
         summary = _local_summary(local_df)
-        render_summary_metrics(summary)
-        numeric_columns = local_df.select_dtypes(include="number").columns.tolist()
-        _render_local_kpis(local_df, numeric_columns)
         palette = st.session_state.get("chart_palette", ["#0078D4", "#004E8C", "#F2C811", "#10B981", "#F97316"])
-        _render_local_chart_builder(local_df, palette)
+        _render_local_executive_dashboard(local_df, summary, palette)
         with st.expander("Dataset preview", expanded=False):
             st.dataframe(local_df.head(20), use_container_width=True)
         return
@@ -1412,7 +1876,7 @@ def render_dashboard(client: BackendClient) -> None:
             else client.get_dashboard(dataset_id)
         )
     except requests.RequestException as exc:
-        st.warning(f"Could not load analytics right now: {exc}")
+        _warn_backend_unavailable("Stats Dashboard")
         return
 
     storyboard_key = f"dashboard_studio_storyboard_{dataset_id}"
@@ -1466,7 +1930,7 @@ def render_dashboard(client: BackendClient) -> None:
             response = client.register_visual(dataset_id, chart)
             st.success("Added to Reports catalog." if response.get("registered") else "Already available in Reports.")
         except requests.RequestException as exc:
-            st.warning(f"Could not add chart to Reports: {exc}")
+            _warn_backend_unavailable("Adding chart to Reports")
 
     _render_dashboard_header(dashboard, summary)
     render_summary_metrics(summary)
@@ -1644,7 +2108,7 @@ def render_ai_insights(client: BackendClient) -> None:
         dashboard_payload = client.get_dashboard(dataset_id)
         insights = insight_payload.get("insights", [])
     except requests.RequestException as exc:
-        st.warning(f"Could not load insights right now: {exc}")
+        _warn_backend_unavailable("Insights")
         return
 
     detection = domain_payload.get("detection", {})
@@ -1735,7 +2199,7 @@ def render_ai_insights(client: BackendClient) -> None:
                     st.markdown("##### Analyst Trace")
                     st.json(analyst)
             except requests.RequestException as exc:
-                st.warning(f"Could not answer question right now: {exc}")
+                _warn_backend_unavailable("Question answering")
 
     with tab_raw:
         st.subheader("Technical Trace")
@@ -1755,12 +2219,19 @@ def render_visual_builder(client: BackendClient) -> None:
     if not dataset_id:
         return
 
-    try:
-        schema = client.get_visual_builder_schema(dataset_id)
-    except requests.RequestException as exc:
-        st.warning(f"Could not load visual builder schema right now: {exc}")
-        return
-
+    local_visual_df = None
+    if is_local_dataset_id(dataset_id):
+        local_visual_df = _local_active_dataframe(dataset_id)
+        if local_visual_df is None:
+            st.info("Upload a dataset first from Dataset Preview.")
+            return
+        schema = _build_local_visual_schema(local_visual_df)
+    else:
+        try:
+            schema = client.get_visual_builder_schema(dataset_id)
+        except requests.RequestException:
+            _warn_backend_unavailable("Dashboard Studio")
+            return
     dimensions = [field["name"] for field in schema.get("dimensions", [])]
     measures = [field["name"] for field in schema.get("measures", [])]
     semantic_fields = {field["name"]: field for field in schema.get("semantic_layer", [])}
@@ -1793,7 +2264,7 @@ def render_visual_builder(client: BackendClient) -> None:
         st.session_state[builder_mode_key] = "insight"
         st.rerun()
     has_spec = bool(st.session_state.get(selected_spec_key))
-    if toolbar[5].button("Add to Storyboard", use_container_width=True, disabled=not has_spec):
+    if toolbar[5].button("Storyboard", use_container_width=True, disabled=not has_spec):
         spec_item = st.session_state[selected_spec_key]
         result = add_storyboard_entry(st.session_state[storyboard_key], spec_item)
         if result.get("added"):
@@ -1826,7 +2297,7 @@ def render_visual_builder(client: BackendClient) -> None:
                         st.session_state[selected_spec_key] = recommendation.get("spec", {})
                         st.session_state[builder_mode_key] = recommendation.get("spec", {}).get("chart_type", "chart") if recommendation.get("spec", {}).get("chart_type") != "kpi" else "chart"
                         st.rerun()
-                    if action_cols[1].button("Add to Storyboard", key=f"story_{recommendation.get('visual_id')}_{idx}", use_container_width=True):
+                    if action_cols[1].button("Storyboard", key=f"story_{recommendation.get('visual_id')}_{idx}", use_container_width=True):
                         result = add_storyboard_entry(st.session_state[storyboard_key], recommendation)
                         if result.get("added"):
                             st.success("Added to storyboard for this session.")
@@ -1893,6 +2364,9 @@ def render_visual_builder(client: BackendClient) -> None:
         with st.container(border=True):
             st.subheader("Insight Card Builder")
             st.caption("Add an AI-generated insight card to the canvas.")
+            if local_visual_df is not None:
+                st.info("AI insight cards require backend connection. Local chart and table builders are available.")
+                return
             try:
                 insight_payload = client.get_insights(dataset_id)
                 insights = insight_payload.get("insights", [])
@@ -1979,12 +2453,14 @@ def render_visual_builder(client: BackendClient) -> None:
     }
 
     if builder_mode == "chart" or spec.get("chart_type") not in {"insight"}:
-        try:
-            visual = client.render_visual(dataset_id, spec)
-        except requests.RequestException as exc:
-            st.warning(f"Could not render visual right now: {exc}")
-            return
-
+        if local_visual_df is not None:
+            visual = _render_local_visual(local_visual_df, spec)
+        else:
+            try:
+                visual = client.render_visual(dataset_id, spec)
+            except requests.RequestException:
+                _warn_backend_unavailable("Dashboard visual rendering")
+                return
         for warning in visual.get("semantic_warnings", []):
             st.warning(warning)
 
@@ -2002,7 +2478,7 @@ def render_visual_builder(client: BackendClient) -> None:
                 else:
                     st.plotly_chart(fig, use_container_width=True)
                 card_cols = st.columns(3)
-                if card_cols[0].button("Add to Storyboard", key="add_current_visual_storyboard", use_container_width=True):
+                if card_cols[0].button("Storyboard", key="add_current_visual_storyboard", use_container_width=True):
                     result = add_storyboard_entry(
                         st.session_state[storyboard_key],
                         {
@@ -2030,7 +2506,7 @@ def render_visual_builder(client: BackendClient) -> None:
                             else:
                                 st.info("Visual already exists in Reports and was reused.")
                         except requests.RequestException as exc:
-                            st.warning(f"Could not add visual to Reports right now: {exc}")
+                            _warn_backend_unavailable("Adding visual to Reports")
                 card_cols[2].caption("Use Reports to export selected visuals as PDF, PPTX, PNG, JSON, CSV, or Excel.")
                 st.caption(
                     "Known issue: legend, tooltip, and number format options may not be fully applied by the renderer, "
@@ -2161,7 +2637,7 @@ def render_reports(client: BackendClient) -> None:
     try:
         report = client.get_report(dataset_id)
     except requests.RequestException as exc:
-        st.warning(f"Could not load report preview right now: {exc}")
+        _warn_backend_unavailable("Reports")
         return
 
     branding = report.get("branding", {})
@@ -2262,11 +2738,15 @@ def render_sql_lab(client: BackendClient) -> None:
     if not dataset_id:
         return
 
+    if is_local_dataset_id(dataset_id):
+        st.info("SQL Lab requires backend connection. Local dataset dashboards and previews are available.")
+        return
+
     try:
         templates = client.get_sql_templates(dataset_id).get("templates", [])
         history = client.get_sql_history(dataset_id)
     except requests.RequestException as exc:
-        st.warning(f"Could not load SQL Lab right now: {exc}")
+        _warn_backend_unavailable("SQL Lab")
         return
 
     if "sql_lab_query" not in st.session_state:
@@ -2304,7 +2784,7 @@ def render_sql_lab(client: BackendClient) -> None:
                 st.session_state["sql_lab_message"] = generated.get("explanation", "")
                 st.rerun()
             except requests.RequestException as exc:
-                st.warning(f"Could not generate SQL right now: {exc}")
+                _warn_backend_unavailable("SQL generation")
 
         sql = st.text_area("SQL editor", key="sql_lab_query", height=180)
         limit = st.slider("Preview limit", 10, 1000, 100, step=10)
@@ -2315,12 +2795,12 @@ def render_sql_lab(client: BackendClient) -> None:
                 result = client.run_sql(dataset_id, sql, limit)
                 st.session_state["sql_lab_result"] = result
             except requests.RequestException as exc:
-                st.warning(f"SQL failed: {exc}")
+                st.warning("SQL could not run right now. Please try again when the backend is connected.")
         if actions[1].button("Explain", use_container_width=True, key=f"sql_explain_{dataset_id}"):
             try:
                 st.info(client.explain_sql(sql).get("explanation", ""))
             except requests.RequestException as exc:
-                st.warning(f"Could not explain SQL right now: {exc}")
+                _warn_backend_unavailable("SQL explanation")
         if actions[2].button("Optimize", use_container_width=True, key=f"sql_optimize_{dataset_id}"):
             try:
                 optimized = client.optimize_sql(sql)
@@ -2328,7 +2808,7 @@ def render_sql_lab(client: BackendClient) -> None:
                 st.session_state["sql_lab_message"] = optimized.get("suggestions", "")
                 st.rerun()
             except requests.RequestException as exc:
-                st.warning(f"Could not optimize SQL right now: {exc}")
+                _warn_backend_unavailable("SQL optimization")
         if st.session_state.get("sql_lab_message"):
             st.info(st.session_state.pop("sql_lab_message"))
         if actions[3].button("Detect Errors", use_container_width=True, key=f"sql_detect_errors_{dataset_id}"):
@@ -2336,13 +2816,13 @@ def render_sql_lab(client: BackendClient) -> None:
                 checked = client.detect_sql_errors(sql)
                 st.success("No SQL safety issues detected.") if checked.get("valid") else st.warning(checked.get("error", "Invalid SQL"))
             except requests.RequestException as exc:
-                st.warning(f"Could not detect SQL errors right now: {exc}")
+                _warn_backend_unavailable("SQL validation")
         if actions[4].button("Save", use_container_width=True, key=f"sql_save_{dataset_id}"):
             try:
                 client.save_sql(dataset_id, f"Query {len(history.get('saved_queries', [])) + 1}", sql)
                 st.success("Query saved.")
             except requests.RequestException as exc:
-                st.warning(f"Could not save query right now: {exc}")
+                _warn_backend_unavailable("SQL query saving")
 
         result = st.session_state.get("sql_lab_result")
         if result:
@@ -2382,10 +2862,14 @@ def render_presentation_mode(client: BackendClient) -> None:
     if not dataset_id:
         return
 
+    if is_local_dataset_id(dataset_id):
+        st.info("Presentation Mode requires backend connection. Local dataset dashboards and previews are available.")
+        return
+
     try:
         report = client.get_report(dataset_id)
     except requests.RequestException as exc:
-        st.warning(f"Could not load presentation right now: {exc}")
+        _warn_backend_unavailable("Presentation Mode")
         return
 
     slides = _presentation_slides(report)
@@ -2515,7 +2999,7 @@ def render_regional_analytics(client: BackendClient, dataset_id: str | None = No
         metric_options = bootstrap.get("available_metrics", [])
         agg_options = bootstrap.get("aggregation_options", ["Average", "Sum", "Count", "Median"])
     except requests.RequestException as exc:
-        st.warning(f"Could not load regional analytics right now: {exc}")
+        _warn_backend_unavailable("Regional analytics")
         return
     control_cols = st.columns([2, 1])
     selected_metric = control_cols[0].selectbox(
@@ -2535,7 +3019,7 @@ def render_regional_analytics(client: BackendClient, dataset_id: str | None = No
             aggregation=str(selected_aggregation).lower(),
         )
     except requests.RequestException as exc:
-        st.warning(f"Could not apply regional metric settings right now: {exc}")
+        _warn_backend_unavailable("Regional metric settings")
         return
     if not regional.get("available"):
         st.info(regional.get("geo_detection", {}).get("message", "No geographic fields detected."))
@@ -2634,7 +3118,7 @@ def render_geographic_insights(client: BackendClient, dataset_id: str | None = N
             aggregation=str(aggregation).lower(),
         )
     except requests.RequestException as exc:
-        st.warning(f"Could not load geographic insights right now: {exc}")
+        _warn_backend_unavailable("Geographic insights")
         return
     if not regional.get("available"):
         st.info(regional.get("geo_detection", {}).get("message", "No geographic fields detected."))
@@ -2661,10 +3145,14 @@ def render_dax_studio(client: BackendClient) -> None:
     dataset_id = select_dataset(client)
     if not dataset_id:
         return
+    if is_local_dataset_id(dataset_id):
+        st.info("DAX Studio requires backend connection. Local dataset dashboards and previews are available.")
+        return
+
     try:
         library = client.get_dax_library(dataset_id)
     except requests.RequestException as exc:
-        st.warning(f"Could not load DAX Studio right now: {exc}")
+        _warn_backend_unavailable("DAX Studio")
         return
     if "dax_formula" not in st.session_state:
         measures = library.get("measures", [])
@@ -2875,7 +3363,7 @@ def render_dax_studio(client: BackendClient) -> None:
                 st.session_state["dax_message"] = generated.get("explanation", "")
                 st.rerun()
             except requests.RequestException as exc:
-                st.warning(f"Could not generate DAX right now: {exc}")
+                _warn_backend_unavailable("DAX generation")
         measure_label = st.text_input("Custom measure name", value=measure_name_from_dax(st.session_state.get("dax_formula", "")), key=f"dax_measure_name_{dataset_id}")
         dax = st.text_area("Power BI measure builder", key="dax_formula", height=220)
         actions = st.columns(6)
@@ -2883,7 +3371,7 @@ def render_dax_studio(client: BackendClient) -> None:
             try:
                 st.info(client.explain_dax(dax).get("explanation", ""))
             except requests.RequestException as exc:
-                st.warning(f"Could not explain DAX right now: {exc}")
+                _warn_backend_unavailable("DAX explanation")
         if actions[1].button("Optimize", use_container_width=True, key=f"dax_optimize_{dataset_id}"):
             try:
                 optimized = client.optimize_dax(dax, dataset_id)
@@ -2892,7 +3380,7 @@ def render_dax_studio(client: BackendClient) -> None:
                 st.session_state["dax_message"] = optimized.get("suggestions", "")
                 st.rerun()
             except requests.RequestException as exc:
-                st.warning(f"Could not optimize DAX right now: {exc}")
+                _warn_backend_unavailable("DAX optimization")
         if st.session_state.get("dax_message"):
             st.info(st.session_state.pop("dax_message"))
         if actions[2].button("Detect Errors", use_container_width=True, key=f"dax_detect_errors_{dataset_id}"):
@@ -2900,7 +3388,7 @@ def render_dax_studio(client: BackendClient) -> None:
                 checked = client.detect_dax_errors(dax)
                 st.success("No DAX structure issues detected.") if checked.get("valid") else st.warning(checked.get("error", "Invalid DAX"))
             except requests.RequestException as exc:
-                st.warning(f"Could not detect DAX errors right now: {exc}")
+                _warn_backend_unavailable("DAX validation")
         if actions[3].button("Preview Visual", use_container_width=True, key=f"dax_preview_visual_{dataset_id}"):
             st.session_state["dax_package"] = package_from_editor(dax)
         if actions[4].button("Save Measure", use_container_width=True, key=f"dax_save_measure_{dataset_id}"):
@@ -2948,10 +3436,14 @@ def render_storyboard_builder(client: BackendClient) -> None:
         st.info("If no visuals are added yet, go to Dashboard Studio and click Add to Storyboard.")
         return
 
-    try:
-        schema = client.get_visual_builder_schema(dataset_id)
-    except requests.RequestException:
-        schema = {}
+    local_storyboard_df = _local_active_dataframe(dataset_id) if is_local_dataset_id(dataset_id) else None
+    if local_storyboard_df is not None:
+        schema = _build_local_visual_schema(local_storyboard_df)
+    else:
+        try:
+            schema = client.get_visual_builder_schema(dataset_id)
+        except requests.RequestException:
+            schema = {}
 
     template = st.selectbox(
         "Storyboard template",
@@ -3024,13 +3516,19 @@ def render_storyboard_builder(client: BackendClient) -> None:
         if spec.get("chart_type") == "kpi":
             st.metric(spec.get("title", "KPI"), spec.get("value", "—"))
         elif layout_mode not in {"Summary only", "Table only"} and spec.get("dimension"):
-            try:
-                visual = client.render_visual(dataset_id, spec)
+            if local_storyboard_df is not None:
+                visual = _render_local_visual(local_storyboard_df, spec)
                 chart = visual.get("chart", {})
                 plotly_spec = chart.get("plotly", {})
                 st.plotly_chart(go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {})), use_container_width=True)
-            except requests.RequestException as exc:
-                st.warning(f"Could not render storyboard visual: {exc}")
+            else:
+                try:
+                    visual = client.render_visual(dataset_id, spec)
+                    chart = visual.get("chart", {})
+                    plotly_spec = chart.get("plotly", {})
+                    st.plotly_chart(go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {})), use_container_width=True)
+                except requests.RequestException:
+                    _warn_backend_unavailable("Storyboard visual rendering")
         elif layout_mode == "Table only":
             st.dataframe(pd.DataFrame([current.get("spec", {})]), use_container_width=True)
 
