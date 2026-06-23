@@ -175,10 +175,22 @@ DEFAULT_BRANDING = {
 LOCAL_MODE_INFO_MESSAGE = "Backend unavailable — running local Streamlit analysis mode."
 
 
+def _is_local_dataset_id(dataset_id: str | None) -> bool:
+    if not dataset_id:
+        return False
+    return str(dataset_id).startswith("local_") or str(dataset_id).startswith("local::")
+
+
+def _build_local_dataset_id(filename: str) -> str:
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(filename).stem).strip("._-") or "dataset"
+    return f"local_{int(time.time() * 1000)}_{safe_name}"
+
+
 def initialize_session_state(initial_branding: dict | None = None) -> None:
     """Keep app state stable across navigation, uploads, and theme changes."""
     branding = {**DEFAULT_BRANDING, **(initial_branding or {})}
     st.session_state.setdefault("uploaded_datasets", {})
+    st.session_state.setdefault("local_dataframes", {})
     st.session_state.setdefault("active_dataset_id", st.session_state.get("selected_dataset_id"))
     st.session_state.setdefault("active_dataframe", None)
     st.session_state.setdefault("selected_theme", branding.get("theme_name", "power_bi_professional"))
@@ -442,16 +454,55 @@ def get_dataset_options(client: BackendClient) -> list[dict]:
         datasets = client.list_datasets()
     except requests.RequestException:
         datasets = []
+
+    merged: dict[str, dict] = {}
     for item in datasets:
         dataset_id = item.get("dataset_id")
         if dataset_id:
             st.session_state["uploaded_datasets"].setdefault(dataset_id, item)
-    return datasets
+            merged[dataset_id] = item
+
+    for dataset_id, item in st.session_state.get("uploaded_datasets", {}).items():
+        if not dataset_id:
+            continue
+        if _is_local_dataset_id(dataset_id):
+            merged[dataset_id] = {
+                "dataset_id": dataset_id,
+                "original_filename": item.get("original_filename", "Uploaded dataset"),
+            }
+
+    selected_id = st.session_state.get("active_dataset_id") or st.session_state.get("selected_dataset_id")
+    if selected_id and selected_id in st.session_state.get("uploaded_datasets", {}) and selected_id not in merged:
+        selected_item = st.session_state["uploaded_datasets"][selected_id]
+        merged[selected_id] = {
+            "dataset_id": selected_id,
+            "original_filename": selected_item.get("original_filename", "Uploaded dataset"),
+        }
+
+    # Safety net: if a local dataframe exists but metadata was not merged yet, synthesize one option.
+    local_map = st.session_state.get("local_dataframes", {})
+    if not merged and isinstance(local_map, dict) and local_map:
+        fallback_id = selected_id if selected_id in local_map else next(iter(local_map.keys()))
+        fallback_name = st.session_state.get("uploaded_datasets", {}).get(fallback_id, {}).get("original_filename", "Uploaded dataset")
+        merged[fallback_id] = {
+            "dataset_id": fallback_id,
+            "original_filename": fallback_name,
+        }
+
+    return list(merged.values())
 
 
 def select_dataset(client: BackendClient, key: str | None = None) -> str | None:
     datasets = get_dataset_options(client)
     if not datasets:
+        local_map = st.session_state.get("local_dataframes", {})
+        if isinstance(local_map, dict) and local_map:
+            fallback_id = st.session_state.get("active_dataset_id") or st.session_state.get("selected_dataset_id")
+            if fallback_id not in local_map:
+                fallback_id = next(iter(local_map.keys()))
+            st.session_state["active_dataset_id"] = fallback_id
+            st.session_state["selected_dataset_id"] = fallback_id
+            return fallback_id
         st.info("No datasets found. Upload a CSV first.")
         return None
 
@@ -628,7 +679,7 @@ def _register_local_uploaded_dataset(uploaded_file) -> bool:
         st.error(f"Local fallback failed: {exc}")
         return False
 
-    local_dataset_id = f"local::{int(time.time() * 1000)}"
+    local_dataset_id = _build_local_dataset_id(uploaded_file.name)
     st.session_state["uploaded_datasets"][local_dataset_id] = {
         "dataset_id": local_dataset_id,
         "original_filename": uploaded_file.name,
@@ -636,7 +687,9 @@ def _register_local_uploaded_dataset(uploaded_file) -> bool:
     st.session_state["active_dataset_id"] = local_dataset_id
     st.session_state["selected_dataset_id"] = local_dataset_id
     st.session_state["active_dataframe"] = local_df
+    st.session_state["local_dataframes"][local_dataset_id] = local_df
     st.session_state["local_uploaded_dataset"] = {
+        "dataset_id": local_dataset_id,
         "filename": uploaded_file.name,
         "dataframe": local_df,
     }
@@ -645,14 +698,21 @@ def _register_local_uploaded_dataset(uploaded_file) -> bool:
     return True
 
 
-def _local_active_dataframe() -> pd.DataFrame | None:
+def _local_active_dataframe(dataset_id: str | None = None) -> pd.DataFrame | None:
+    if dataset_id:
+        local_map = st.session_state.get("local_dataframes", {})
+        if isinstance(local_map, dict):
+            dataset_df = local_map.get(dataset_id)
+            if isinstance(dataset_df, pd.DataFrame):
+                return dataset_df
+
     active_df = st.session_state.get("active_dataframe")
-    if isinstance(active_df, pd.DataFrame) and not active_df.empty:
+    if isinstance(active_df, pd.DataFrame):
         return active_df
     local_dataset = st.session_state.get("local_uploaded_dataset")
     if isinstance(local_dataset, dict):
         local_df = local_dataset.get("dataframe")
-        if isinstance(local_df, pd.DataFrame) and not local_df.empty:
+        if isinstance(local_df, pd.DataFrame):
             return local_df
     return None
 
@@ -748,8 +808,8 @@ def render_dataset_overview(client: BackendClient) -> None:
             _render_local_dataset_workbench(local_dataset["dataframe"], local_dataset["filename"], branding)
         return
 
-    if str(dataset_id).startswith("local::"):
-        active_df = st.session_state.get("active_dataframe")
+    if _is_local_dataset_id(dataset_id):
+        active_df = _local_active_dataframe(dataset_id)
         local_dataset = st.session_state.get("uploaded_datasets", {}).get(dataset_id, {})
         if active_df is not None:
             _render_local_dataset_workbench(active_df, local_dataset.get("original_filename", "Uploaded dataset"), branding)
@@ -1324,8 +1384,8 @@ def render_dashboard(client: BackendClient) -> None:
     if not dataset_id:
         return
 
-    if str(dataset_id).startswith("local::"):
-        local_df = _local_active_dataframe()
+    if _is_local_dataset_id(dataset_id):
+        local_df = _local_active_dataframe(dataset_id)
         if local_df is None:
             st.info("Upload a dataset first from Dataset Preview.")
             return
@@ -1556,8 +1616,8 @@ def render_ai_insights(client: BackendClient) -> None:
     if not dataset_id:
         st.info("Upload a dataset first from Dataset Preview.")
         return
-    if str(dataset_id).startswith("local::"):
-        local_df = _local_active_dataframe()
+    if _is_local_dataset_id(dataset_id):
+        local_df = _local_active_dataframe(dataset_id)
         if local_df is None:
             st.info("Upload a dataset first from Dataset Preview.")
             return
@@ -2082,8 +2142,8 @@ def render_reports(client: BackendClient) -> None:
     if not dataset_id:
         return
 
-    if str(dataset_id).startswith("local::"):
-        local_df = _local_active_dataframe()
+    if _is_local_dataset_id(dataset_id):
+        local_df = _local_active_dataframe(dataset_id)
         if local_df is None:
             st.info("Upload a dataset first from Dataset Preview.")
             return
@@ -2404,8 +2464,8 @@ def render_regional_analytics(client: BackendClient, dataset_id: str | None = No
         dataset_id = select_dataset(client, key="regional_analytics_dataset")
         if not dataset_id:
             return
-    if str(dataset_id).startswith("local::"):
-        local_df = _local_active_dataframe()
+    if _is_local_dataset_id(dataset_id):
+        local_df = _local_active_dataframe(dataset_id)
         if local_df is None:
             st.info("Upload a dataset first from Dataset Preview.")
             return
@@ -2522,8 +2582,8 @@ def render_geographic_insights(client: BackendClient, dataset_id: str | None = N
         dataset_id = select_dataset(client, key="geographic_insights_dataset")
         if not dataset_id:
             return
-    if str(dataset_id).startswith("local::"):
-        local_df = _local_active_dataframe()
+    if _is_local_dataset_id(dataset_id):
+        local_df = _local_active_dataframe(dataset_id)
         if local_df is None:
             st.info("Upload a dataset first from Dataset Preview.")
             return
