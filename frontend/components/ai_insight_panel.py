@@ -181,7 +181,7 @@ def render_business_insights_overview(
     5. What / Why / Action storyboard blocks
     6. Risks and warnings
     7. Recommendations
-    8. Technical evidence collapsed at bottom
+    8. Technical evidence is shown per insight card
     """
     _css()
 
@@ -371,10 +371,4 @@ def render_business_insights_overview(
                 unsafe_allow_html=True,
             )
 
-    # ── 8. Technical Evidence (collapsed at bottom — single expander) ──
-    st.markdown("<br>", unsafe_allow_html=True)
-    with st.expander("Developer details / technical evidence", expanded=False):
-        if raw_payload:
-            st.json(raw_payload)
-        elif executive:
-            st.json(executive)
+    # Technical evidence is rendered on individual insight cards.

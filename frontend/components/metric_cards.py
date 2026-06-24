@@ -50,14 +50,12 @@ def render_summary_metrics(summary: dict) -> None:
         unsafe_allow_html=True,
     )
     tiles = [
-        ("Rows", f"{summary.get('row_count', 0):,}"),
-        ("Columns", f"{summary.get('column_count', 0):,}"),
-        ("Completeness", _format_pct(completeness)),
-        ("Missing", f"{missing:,}"),
-        ("Quality", quality_label),
+        ("Rows", f"{summary.get('row_count', 0):,}", "Total records available for analysis."),
+        ("Columns", f"{summary.get('column_count', 0):,}", "Total fields available for metrics, segments, and charts."),
+        ("Completeness", _format_pct(completeness), "Percent of cells with usable values."),
+        ("Missing", f"{missing:,}", "Blank or null values that may affect statistical reliability."),
+        ("Quality", quality_label, "Overall readiness based on missing values and duplicate rows."),
     ]
-    html = "".join(
-        f'<div class="summary-tile"><div class="summary-label">{label}</div><div class="summary-value">{value}</div></div>'
-        for label, value in tiles
-    )
-    st.markdown(f'<div class="summary-strip">{html}</div>', unsafe_allow_html=True)
+    cols = st.columns(len(tiles))
+    for col, (label, value, help_text) in zip(cols, tiles):
+        col.metric(label, value, help=help_text)

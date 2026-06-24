@@ -11,6 +11,13 @@ PLOTLY_CONFIG = {
 }
 
 
+def _safe_text(value: object, fallback: str) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"undefined", "none", "null", "nan"}:
+        return fallback
+    return text
+
+
 def _chart_key(chart: dict, index: int) -> str:
     return f"chart_{index}_{chart.get('chart_id') or chart.get('title', 'visual')}"
 
@@ -36,9 +43,10 @@ def _prepare_figure(chart: dict) -> go.Figure | None:
 
 def _render_chart_header(chart: dict) -> None:
     metadata = chart.get("metadata", {})
-    title = chart.get("title", "Chart")
-    chart_type = chart.get("chart_type", "chart").replace("_", " ").title()
-    subtitle = metadata.get("subtitle", "")
+    raw_chart_type = _safe_text(chart.get("chart_type"), "chart")
+    title = _safe_text(chart.get("title"), "Chart")
+    chart_type = raw_chart_type.replace("_", " ").title()
+    subtitle = _safe_text(metadata.get("subtitle"), "")
     st.markdown(
         f"""
         <div class="chart-card-header">
