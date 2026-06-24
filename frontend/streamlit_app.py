@@ -10,14 +10,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from frontend.api_client.backend_client import DEFAULT_API_BASE_URL
-from frontend.pages.ai_insights_page import render_ai_insights, render_business_visual_analysis, render_data_visual_analysis
-from frontend.pages.dashboard_page import render_dashboard
-from frontend.pages.dashboard_studio_page import render_visual_builder
-from frontend.pages.dataset_page import render_data_cleaning, render_dataset_overview
-from frontend.pages.location_page import render_location_insights
-from frontend.pages.reports_page import render_reports
-from frontend.pages.sql_dax_page import render_dax_studio, render_sql_lab
-from frontend.pages.storyboard_page import render_storyboard_builder
+from frontend.app_pages.ai_insights_page import render_ai_insights, render_business_visual_analysis, render_data_visual_analysis
+from frontend.app_pages.dashboard_page import render_dashboard
+from frontend.app_pages.dashboard_studio_page import render_visual_builder
+from frontend.app_pages.dataset_page import render_data_cleaning, render_dataset_overview
+from frontend.app_pages.location_page import render_location_insights
+from frontend.app_pages.reports_page import render_reports
+from frontend.app_pages.sql_dax_page import render_dax_studio, render_sql_lab
+from frontend.app_pages.storyboard_page import render_storyboard_builder
 from frontend.utils.backend_utils import get_client, render_backend_status
 from frontend.utils.session_state import initialize_session_state
 from frontend.utils.theme_manager import _apply_branding_theme, get_active_branding, render_branding_editor, render_dashboard_settings, render_theme_selector

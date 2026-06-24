@@ -49,8 +49,8 @@ from frontend.utils.theme_manager import (
     render_dashboard_settings,
     render_theme_selector,
 )
-from frontend.pages.dashboard_page import _render_kpi_cards
-from frontend.pages.dataset_page import _local_active_dataframe
+from frontend.app_pages.dashboard_page import _render_kpi_cards
+from frontend.app_pages.dataset_page import _local_active_dataframe
 from frontend.utils.kpi_helpers import _local_summary, build_data_anomaly_report, build_default_kpis
 from frontend.utils.local_helpers import (
     _figure_png_bytes,

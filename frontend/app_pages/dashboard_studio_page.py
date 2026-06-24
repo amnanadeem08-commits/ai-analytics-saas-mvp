@@ -49,7 +49,7 @@ from frontend.utils.theme_manager import (
     render_dashboard_settings,
     render_theme_selector,
 )
-from frontend.pages.dataset_page import _local_active_dataframe
+from frontend.app_pages.dataset_page import _local_active_dataframe
 from frontend.utils.local_helpers import (
     _build_local_visual_schema,
     _dashboard_studio_slicer_payload,

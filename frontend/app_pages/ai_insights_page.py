@@ -49,13 +49,13 @@ from frontend.utils.theme_manager import (
     render_dashboard_settings,
     render_theme_selector,
 )
-from frontend.pages.dashboard_page import (
+from frontend.app_pages.dashboard_page import (
     _render_business_summary,
     _render_dashboard_header,
     _render_data_quality_panel,
     _render_kpi_cards,
 )
-from frontend.pages.dataset_page import _local_active_dataframe
+from frontend.app_pages.dataset_page import _local_active_dataframe
 from frontend.utils.kpi_helpers import _local_column_groups, _local_summary, build_data_anomaly_report
 from frontend.utils.local_helpers import (
     _local_anomaly_rows,

@@ -49,7 +49,7 @@ from frontend.utils.theme_manager import (
     render_dashboard_settings,
     render_theme_selector,
 )
-from frontend.pages.dataset_page import _local_active_dataframe
+from frontend.app_pages.dataset_page import _local_active_dataframe
 from frontend.utils.local_helpers import _detect_metric_column, _detect_regional_column, select_dataset
 
 def render_location_insights(client: BackendClient) -> None:

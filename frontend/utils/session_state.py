@@ -41,7 +41,7 @@ def _ensure_default_local_storyboard(dataset_id: str, df: pd.DataFrame) -> list[
     items = st.session_state.get("storyboard_items")
     has_items = isinstance(items, list) and bool(items)
     if current_dataset != dataset_id or not has_items:
-        from frontend.pages.storyboard_page import build_default_storyboard
+        from frontend.app_pages.storyboard_page import build_default_storyboard
 
         built = build_default_storyboard(df, dataset_id, st.session_state.get("selected_theme"), dict(st.session_state))
         _sync_storyboard_keys(dataset_id, built)

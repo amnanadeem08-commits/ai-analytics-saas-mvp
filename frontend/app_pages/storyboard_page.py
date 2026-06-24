@@ -49,8 +49,8 @@ from frontend.utils.theme_manager import (
     render_dashboard_settings,
     render_theme_selector,
 )
-from frontend.pages.dataset_page import _local_active_dataframe
-from frontend.pages.reports_page import render_export_downloads
+from frontend.app_pages.dataset_page import _local_active_dataframe
+from frontend.app_pages.reports_page import render_export_downloads
 from frontend.utils.kpi_helpers import build_storyboard_kpis, local_column_groups, _local_kpi_cards, local_summary, quality_score
 from frontend.utils.local_helpers import (
     _add_recommended_visual_slide,
