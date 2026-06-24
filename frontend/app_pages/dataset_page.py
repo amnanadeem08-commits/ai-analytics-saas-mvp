@@ -72,33 +72,20 @@ def render_dataset_upload_area(client: BackendClient) -> None:
             return
 
         size_mb = uploaded_file.size / 1024 / 1024
+        upload_signature = f"{uploaded_file.name}:{uploaded_file.size}"
         st.caption(f"Selected file: {uploaded_file.name} ({size_mb:.1f} MB)")
-        if st.button("Upload and Analyze Dataset", type="primary", use_container_width=True):
-            if not ensure_backend_available(client):
-                if _register_local_uploaded_dataset(uploaded_file):
-                    st.rerun()
-                return
-            try:
-                with st.spinner("Streaming file to the backend and analyzing it..."):
-                    result = client.upload_csv(uploaded_file)
-                st.success(result.get("message", "Dataset uploaded."))
-                backend_dataset_id = result["dataset_id"]
-                st.session_state["uploaded_datasets"][backend_dataset_id] = {
-                    "dataset_id": backend_dataset_id,
-                    "original_filename": uploaded_file.name,
-                }
-                st.session_state["active_dataset_id"] = backend_dataset_id
-                st.session_state["selected_dataset_id"] = backend_dataset_id
-                st.session_state.pop("active_dataframe", None)
-                st.session_state.pop("local_uploaded_dataset", None)
-                st.session_state["local_mode_notice"] = False
+
+        if st.session_state.get("dataset_upload_signature") != upload_signature:
+            if _register_local_uploaded_dataset(uploaded_file):
+                st.session_state["dataset_upload_signature"] = upload_signature
+                st.success("Dataset loaded locally. Preview and analysis are ready.")
                 st.rerun()
-            except requests.Timeout:
-                if _register_local_uploaded_dataset(uploaded_file):
-                    st.rerun()
-            except requests.RequestException as exc:
-                if not _register_local_uploaded_dataset(uploaded_file):
-                    st.error("Upload could not be processed right now. Local preview and dashboard remain available when the file can be read locally.")
+            return
+
+        st.success("Dataset is loaded locally for preview, cleaning, dashboards, insights, and reports.")
+        if st.button("Reload selected file", use_container_width=True):
+            st.session_state.pop("dataset_upload_signature", None)
+            st.rerun()
 def render_dataset_overview(client: BackendClient) -> None:
     st.header("Dataset Preview")
     branding = st.session_state.get("branding", DEFAULT_BRANDING)
