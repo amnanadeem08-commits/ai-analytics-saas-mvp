@@ -208,7 +208,18 @@ def _render_local_data_quality_score(df: pd.DataFrame, summary: dict) -> None:
                 st.write(f"- {reason}")
 def _render_local_key_metrics(df: pd.DataFrame) -> None:
     st.subheader("Key Metrics")
-    _render_kpi_cards(_local_kpi_cards(df), {"surface": "var(--ui-surface)", "border": "var(--surface-border)", "muted_text": "var(--text-muted)", "text": "var(--text-color)"}, key_prefix="local_dashboard")
+    cards = _local_kpi_cards(df)
+    if not cards:
+        st.info("No KPI cards could be generated for this dataset.")
+        return
+
+    for row_start in range(0, len(cards), 4):
+        cols = st.columns(min(4, len(cards) - row_start))
+        for col, card in zip(cols, cards[row_start : row_start + 4]):
+            label = card.get("label") or card.get("title") or "Metric"
+            value = card.get("value") or card.get("formatted_value") or "-"
+            help_text = card.get("short_interpretation") or card.get("description") or card.get("business_context")
+            col.metric(str(label), str(value), help=help_text)
 def _render_local_chart_recommendations(df: pd.DataFrame, palette: list[str]) -> None:
     st.subheader("Chart Recommendations")
     numeric, categorical, datetime_cols = _local_column_groups(df)
