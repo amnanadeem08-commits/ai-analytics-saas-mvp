@@ -24,6 +24,7 @@ from frontend.components.metric_cards import render_summary_metrics
 from frontend.components.ai_insight_panel import render_business_insights_overview
 from frontend.components.storyboard_session import add_storyboard_entry
 from frontend.utils.backend_utils import (
+    LOCAL_MODE_INFO_MESSAGE,
     _build_local_dataset_id,
     _is_local_dataset_id,
     _warn_backend_unavailable,
