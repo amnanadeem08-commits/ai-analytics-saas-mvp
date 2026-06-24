@@ -692,24 +692,6 @@ def _auto_storyboard_entries(df: pd.DataFrame, dataset_id: str) -> list[dict]:
             }
         )
     return entries
-def _build_storyboard_kpis(schema: dict) -> list[dict]:
-    """Build simple KPI cards from visual builder schema metrics."""
-    kpis = []
-    row_count = 0
-    semantic = schema.get("semantic_layer", [])
-    measures = schema.get("measures", [])
-    for field in semantic:
-        if field.get("semantic_role") in {"revenue_currency_column"}:
-            kpis.append({"label": f"Total {field['name']}", "value": "—", "icon": "chart"})
-        elif field.get("semantic_role") in {"percentage_ratio_column"}:
-            kpis.append({"label": field["name"].replace("_", " ").title(), "value": "—", "icon": "metric"})
-    if not kpis:
-        if measures:
-            for m in measures[:2]:
-                kpis.append({"label": m["name"].replace("_", " ").title(), "value": "—", "icon": "metric"})
-        else:
-            kpis.append({"label": "Records", "value": f"{row_count:,}" if row_count else "—", "icon": "table"})
-    return kpis[:4]
 def _local_storyboard_chart_specs(df: pd.DataFrame, dataset_id: str) -> list[dict]:
     figures = _local_default_figures(df)
     chart_specs: list[dict] = []
