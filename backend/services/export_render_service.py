@@ -7,15 +7,16 @@ from typing import Any
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
 import numpy as np
-import pandas as pd
 import plotly.graph_objects as go
 import plotly.io as pio
 from PIL import Image, ImageDraw, ImageFont
 
+from backend.utils.plotly_kaleido_compat import disable_kaleido_headers
+
 
 logger = logging.getLogger(__name__)
+disable_kaleido_headers()
 
 
 def filter_charts(report: dict[str, Any], chart_ids: list[str] | None = None) -> list[dict[str, Any]]:
@@ -42,14 +43,134 @@ def _plotly_figure(chart: dict[str, Any]) -> go.Figure | None:
         return None
 
 
-def _fallback_matplotlib_chart(chart: dict[str, Any], width: int, height: int) -> bytes | None:
-    """Render a simple fallback chart using matplotlib when Plotly fails."""
+def _coerce_float(value: Any) -> float | None:
     try:
-        chart_type = chart.get("chart_type", "bar")
-        columns = chart.get("columns", [])
+        if value is None or value == "":
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def _valid_png_bytes(png: bytes | None, min_width: int = 120, min_height: int = 80) -> bool:
+    if not png or not png.startswith(b"\x89PNG\r\n\x1a\n"):
+        return False
+    try:
+        with Image.open(io.BytesIO(png)) as image:
+            image.verify()
+        with Image.open(io.BytesIO(png)) as image:
+            if image.width < min_width or image.height < min_height:
+                return False
+            extrema = image.convert("L").getextrema()
+            return bool(extrema and extrema[0] != extrema[1])
+    except Exception:
+        return False
+
+
+def _save_matplotlib_png(fig) -> bytes | None:
+    buf = io.BytesIO()
+    fig.tight_layout()
+    fig.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor=fig.get_facecolor())
+    png = buf.getvalue()
+    return png if _valid_png_bytes(png) else None
+
+
+def _sequence(values: Any) -> list[Any]:
+    if values is None:
+        return []
+    if isinstance(values, (list, tuple)):
+        return list(values)
+    try:
+        return list(values)
+    except Exception:
+        return []
+
+
+def _plotly_trace_data(chart: dict[str, Any]) -> tuple[str, list[Any], list[float]]:
+    traces = chart.get("plotly", {}).get("data", [])
+    if not traces:
+        return "", [], []
+    trace = traces[0] or {}
+    trace_type = str(trace.get("type") or chart.get("chart_type") or "").lower()
+    orientation = str(trace.get("orientation") or "").lower()
+
+    if trace_type == "pie":
+        labels = [str(label) for label in _sequence(trace.get("labels"))]
+        values = [_coerce_float(value) for value in _sequence(trace.get("values"))]
+        pairs = [(label, value) for label, value in zip(labels, values) if value is not None]
+        return "pie", [label for label, _ in pairs], [value for _, value in pairs]
+
+    if trace_type in {"scatter", "line"} or chart.get("chart_type") == "line":
+        x_values = [str(value) for value in _sequence(trace.get("x"))]
+        y_values = [_coerce_float(value) for value in _sequence(trace.get("y"))]
+        pairs = [(label, value) for label, value in zip(x_values, y_values) if value is not None]
+        return "line", [label for label, _ in pairs], [value for _, value in pairs]
+
+    if trace_type == "histogram" or chart.get("chart_type") == "histogram":
+        values = [_coerce_float(value) for value in _sequence(trace.get("x"))]
+        return "histogram", [], [value for value in values if value is not None]
+
+    if trace_type == "bar" or chart.get("chart_type") in {"bar", "horizontal_bar"}:
+        if orientation == "h" or chart.get("chart_type") == "horizontal_bar":
+            labels = [str(label) for label in _sequence(trace.get("y"))]
+            values = [_coerce_float(value) for value in _sequence(trace.get("x"))]
+        else:
+            labels = [str(label) for label in _sequence(trace.get("x"))]
+            values = [_coerce_float(value) for value in _sequence(trace.get("y"))]
+        pairs = [(label, value) for label, value in zip(labels, values) if value is not None]
+        return "bar", [label for label, _ in pairs], [value for _, value in pairs]
+
+    return "", [], []
+
+
+def _render_plotly_trace_with_matplotlib(chart: dict[str, Any], ax) -> bool:
+    plot_type, labels, values = _plotly_trace_data(chart)
+    if plot_type == "pie" and len(labels) >= 2 and len(values) >= 2 and sum(values) != 0:
+        ax.pie(values[:12], labels=labels[:12], autopct="%1.0f%%", startangle=90)
+        ax.axis("equal")
+        return True
+    if plot_type == "line" and len(labels) >= 2 and len(values) >= 2:
+        ax.plot(labels[:40], values[:40], marker="o", color="#118DFF", linewidth=2.2)
+        ax.tick_params(axis="x", rotation=35)
+        ax.set_ylabel("Value")
+        return True
+    if plot_type == "histogram" and len(values) >= 2:
+        ax.hist(values, bins=min(20, max(5, len(values) // 3)), color="#118DFF", edgecolor="white")
+        ax.set_ylabel("Count")
+        return True
+    if plot_type == "bar" and len(labels) >= 2 and len(values) >= 2:
+        bars = ax.barh(labels[:20], values[:20], color=plt.cm.Blues(np.linspace(0.45, 0.85, min(len(labels), 20))))
+        ax.set_xlabel("Value")
+        ax.invert_yaxis()
+        max_value = max(abs(value) for value in values[:20]) or 1
+        for bar, value in zip(bars, values[:20]):
+            ax.text(bar.get_width() + max_value * 0.01, bar.get_y() + bar.get_height() / 2, f"{value:,.0f}", va="center", fontsize=8)
+        return True
+
+    traces = chart.get("plotly", {}).get("data", [])
+    if traces and str((traces[0] or {}).get("type") or "").lower() == "table":
+        header = ((traces[0] or {}).get("header") or {}).get("values") or []
+        cells = ((traces[0] or {}).get("cells") or {}).get("values") or []
+        if header and cells:
+            rows = list(zip(*[_sequence(col)[:10] for col in cells]))
+            ax.axis("off")
+            table = ax.table(
+                cellText=[[str(value) for value in row] for row in rows],
+                colLabels=[str(value) for value in header],
+                loc="center",
+                cellLoc="left",
+            )
+            table.auto_set_font_size(False)
+            table.set_fontsize(8)
+            table.scale(1, 1.25)
+            return True
+    return False
+
+def _fallback_matplotlib_chart(chart: dict[str, Any], width: int, height: int) -> bytes | None:
+    """Render a real fallback chart using matplotlib when Plotly/Kaleido fails."""
+    try:
         metadata = chart.get("metadata", {})
         title = chart.get("title", "Chart")
-        short_insight = metadata.get("short_ai_insight", "")
 
         dpi = 100
         fig_w = width / dpi
@@ -61,11 +182,13 @@ def _fallback_matplotlib_chart(chart: dict[str, Any], width: int, height: int) -
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
 
-        # Try to find categorical and numeric data from top_categories in metadata
-        top_cats = metadata.get("top_categories", {})
+        if _render_plotly_trace_with_matplotlib(chart, ax):
+            png = _save_matplotlib_png(fig)
+            plt.close(fig)
+            return png
 
+        top_cats = metadata.get("top_categories", {})
         if top_cats and isinstance(top_cats, dict):
-            # Use first category found
             cat_name = list(top_cats.keys())[0]
             cat_data = top_cats[cat_name]
             if isinstance(cat_data, list) and len(cat_data) > 0:
@@ -75,24 +198,23 @@ def _fallback_matplotlib_chart(chart: dict[str, Any], width: int, height: int) -
                     if isinstance(item, dict):
                         lbl = item.get("label", item.get("value", ""))
                         val = item.get("value", item.get("count", 0))
-                        if lbl is not None:
+                        numeric = _coerce_float(val)
+                        if lbl is not None and numeric is not None:
                             labels.append(str(lbl)[:20])
-                            values.append(float(val) if val else 0)
-                if labels and values:
+                            values.append(numeric)
+                if len(labels) >= 2 and len(values) >= 2:
                     colors = plt.cm.Blues(np.linspace(0.4, 0.85, len(labels)))
                     bars = ax.barh(labels, values, color=colors, edgecolor="white", height=0.65)
                     ax.set_xlabel("Value", fontsize=10, color="#475569")
+                    max_value = max(abs(value) for value in values) or 1
                     for bar, value in zip(bars, values):
-                        ax.text(bar.get_width() + max(values) * 0.01, bar.get_y() + bar.get_height() / 2,
+                        ax.text(bar.get_width() + max_value * 0.01, bar.get_y() + bar.get_height() / 2,
                                 f"{value:,.0f}", va="center", fontsize=8, color="#475569")
                     ax.invert_yaxis()
-                    fig.tight_layout()
-                    buf = io.BytesIO()
-                    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
+                    png = _save_matplotlib_png(fig)
                     plt.close(fig)
-                    return buf.getvalue()
+                    return png
 
-        # Fallback: use numeric data from correlations or just show a summary card
         corr = metadata.get("correlations", {})
         if corr and isinstance(corr, dict):
             pairs = []
@@ -115,42 +237,48 @@ def _fallback_matplotlib_chart(chart: dict[str, Any], width: int, height: int) -
                             bar.get_y() + bar.get_height() / 2, f"{val:.2f}",
                             va="center", fontsize=8, color="#475569")
                 ax.invert_yaxis()
-                fig.tight_layout()
-                buf = io.BytesIO()
-                fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
+                png = _save_matplotlib_png(fig)
                 plt.close(fig)
-                return buf.getvalue()
+                return png
 
-        if columns and len(columns) >= 2:
-            ax.text(0.5, 0.5, f"{title}\n\n{short_insight}\n\n(Business insight summary)",
-                    transform=ax.transAxes, ha="center", va="center", fontsize=11,
-                    color="#64748B", fontstyle="italic", wrap=True)
-        else:
-            ax.text(0.5, 0.5, f"{title}\n\n{short_insight}",
-                    transform=ax.transAxes, ha="center", va="center", fontsize=11,
-                    color="#64748B", fontstyle="italic")
-        ax.set_xticks([])
-        ax.set_yticks([])
-        fig.tight_layout()
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor=fig.get_facecolor())
         plt.close(fig)
-        return buf.getvalue()
+        logger.warning("No plottable fallback data for chart %s", chart.get("chart_id", "unknown"))
+        return None
     except Exception:
         logger.exception("Matplotlib fallback failed for chart %s", chart.get("chart_id", "unknown"))
         return None
 
-
 def chart_to_png_bytes(chart: dict[str, Any], width: int = 980, height: int = 520) -> bytes | None:
-    """Render a chart spec to PNG bytes. Tries Plotly first, falls back to matplotlib."""
+    """Render a chart spec to PNG bytes.
+
+    Export requirements:
+    - Prefer Plotly + Kaleido when it works.
+    - If Kaleido/Chromium fails, always fall back to a matplotlib renderer so export never silently drops charts.
+    """
     figure = _plotly_figure(chart)
+
     if figure is not None:
         try:
-            return pio.to_image(figure, format="png", width=width, height=height, scale=1)
-        except Exception:
-            logger.exception("Plotly image render failed for chart %s", chart.get("chart_id", "unknown"))
-    # Fallback to matplotlib
-    return _fallback_matplotlib_chart(chart, width, height)
+            # NOTE: Kaleido can fail in some CI/VM setups due to missing/invalid Chromium args.
+            png = pio.to_image(figure, format="png", width=width, height=height, scale=1)
+            if _valid_png_bytes(png):
+                return png
+            logger.warning("Plotly->PNG produced invalid PNG for chart %s", chart.get("chart_id", "unknown"))
+        except Exception as exc:
+            logger.warning(
+                "Plotly->PNG render failed for chart %s; falling back to matplotlib. Error=%s",
+                chart.get("chart_id", "unknown"),
+                str(exc)[:300],
+            )
+
+    # Fallback to matplotlib (best-effort)
+    try:
+        png = _fallback_matplotlib_chart(chart, width, height)
+        return png if _valid_png_bytes(png) else None
+    except Exception:
+        logger.exception("Matplotlib fallback failed for chart %s", chart.get("chart_id", "unknown"))
+        return None
+
 
 
 # ── PNG dashboard snapshot ──────────────────────────────────────────────

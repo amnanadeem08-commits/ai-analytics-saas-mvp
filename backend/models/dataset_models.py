@@ -82,6 +82,7 @@ class CleaningOptions(BaseModel):
     outlier_strategy: str = Field(default="keep", pattern="^(keep|cap|remove)$")
     outlier_method: str = Field(default="iqr", pattern="^(iqr|zscore)$")
     outlier_zscore_threshold: float = Field(default=3.0, ge=1.0, le=6.0)
+    remove_duplicates: bool = Field(default=True, description="Whether to remove duplicate rows during cleaning.")
 
 
 class CleaningChange(BaseModel):

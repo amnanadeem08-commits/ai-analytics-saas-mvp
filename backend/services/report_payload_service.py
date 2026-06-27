@@ -4,6 +4,7 @@ from typing import Any
 
 from backend.core.branding_manager import branding_manager
 from backend.services.dashboard_service import build_dashboard_view
+from backend.services.executive_storyboard_service import build_executive_storyboard
 from backend.services.insight_service import get_insights
 from backend.services.storytelling_service import build_business_story
 
@@ -28,4 +29,5 @@ def build_report_payload(dataset_id: str) -> dict[str, Any]:
         "suggested_questions": dashboard.get("suggested_questions", []),
         "chart_specs": dashboard["chart_specs"],
         "chart_count": len(dashboard["chart_specs"]),
+        "executive_storyboard": build_executive_storyboard(dataset_id),
     }

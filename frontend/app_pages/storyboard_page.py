@@ -14,6 +14,7 @@ import requests
 import streamlit as st
 
 from frontend.api_client.backend_client import BackendClient, DEFAULT_API_BASE_URL
+from frontend.components.executive_storyboard import render_executive_storyboard
 from frontend.components.chart_components import (
     render_plotly_chart_specs,
     render_time_trends,
@@ -180,6 +181,13 @@ def render_storyboard_builder(client: BackendClient) -> None:
     if local_storyboard_df is not None:
         _render_local_storyboard_builder(dataset_id, local_storyboard_df)
         return
+
+    if local_storyboard_df is None:
+        try:
+            render_executive_storyboard(client.get_executive_storyboard(dataset_id))
+        except requests.RequestException:
+            _warn_backend_unavailable("Executive Storyboard")
+        st.divider()
 
     if not visuals:
         st.info("No storyboard visuals were found for this backend dataset. Add visuals from Dashboard Studio to begin this storyboard.")

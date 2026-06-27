@@ -57,6 +57,75 @@ from frontend.utils.local_helpers import (
     select_dataset,
 )
 
+
+def _dashboard_studio_css() -> None:
+    st.markdown(
+        """
+        <style>
+        /* Dashboard Studio presentation-only styling */
+        .ds-studio-wrap {
+            padding: 12px 4px;
+        }
+        .ds-card {
+            border: 1px solid rgba(148,163,184,0.25);
+            border-radius: 16px;
+            background: rgba(255,255,255,0.80);
+            box-shadow: 0 8px 20px rgba(0,0,0,0.03);
+            overflow: hidden;
+        }
+        .ds-card-header {
+            padding: 14px 16px 10px 16px;
+            border-bottom: 1px solid rgba(148,163,184,0.18);
+            background: linear-gradient(180deg, rgba(148,163,184,0.08), rgba(255,255,255,0));
+        }
+        .ds-card-title {
+            font-size: 1.00rem;
+            font-weight: 900;
+            color: var(--text-color);
+            line-height: 1.2;
+        }
+        .ds-card-subtitle {
+            font-size: 0.82rem;
+            color: var(--text-subtle);
+            margin-top: 4px;
+            line-height: 1.35;
+        }
+        .ds-card-body {
+            padding: 10px 12px 6px 12px;
+        }
+        .ds-card-footer {
+            padding: 10px 12px 14px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .ds-footer-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .ds-confidence {
+            font-size: 0.78rem;
+            color: var(--text-muted-soft);
+        }
+        .ds-section-title {
+            font-size: 1.02rem;
+            font-weight: 900;
+            margin-top: 4px;
+        }
+        .ds-muted-hint {
+            font-size: 0.82rem;
+            color: var(--text-subtle);
+        }
+        .ds-grid-gap > div {
+            margin-bottom: 12px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def render_visual_builder(client: BackendClient) -> None:
     st.header("Dashboard Studio")
     st.caption("Build Power BI/Tableau-style visuals using semantic field roles, safer defaults, and business-friendly settings.")
@@ -227,8 +296,16 @@ def render_visual_builder(client: BackendClient) -> None:
                 st.info("Could not load insights for insight card builder.")
 
     # Chart builder (always visible, active when builder_mode == "chart")
-    filters = _dashboard_studio_slicer_payload(schema, dataset_id)
-    canvas, settings = st.columns([2.2, 1])
+    _dashboard_studio_css()
+
+    # Sidebar + Canvas layout: filters on the right, builder controls on the left.
+    # Presentation-only: we keep the returned `filters` payload identical.
+    left, right = st.columns([2.2, 1])
+    with right:
+        st.subheader("Filters")
+        filters = _dashboard_studio_slicer_payload(schema, dataset_id)
+
+    canvas, settings = left.columns([1.6, 1])
     selected_spec = st.session_state.get(selected_spec_key, {})
     with settings:
         st.subheader("Visual Settings")
@@ -314,49 +391,84 @@ def render_visual_builder(client: BackendClient) -> None:
             chart = visual.get("chart", {})
             plotly_spec = chart.get("plotly", {})
             fig = go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {}))
-            with st.container(border=True):
-                st.markdown(f"**{chart.get('title', 'Dashboard Visual')}**")
-                st.caption(chart.get("metadata", {}).get("short_ai_insight", "Use this visual to compare business performance across the selected fields."))
-                filtered_rows = chart.get("metadata", {}).get("filtered_rows")
-                if filtered_rows == 0:
-                    st.warning("No data matches the selected filters.")
-                else:
-                    st.plotly_chart(fig, use_container_width=True)
-                card_cols = st.columns(3)
-                if card_cols[0].button("Storyboard", key="add_current_visual_storyboard", use_container_width=True):
-                    result = add_storyboard_entry(
-                        st.session_state[storyboard_key],
-                        {
-                            "chart_id": chart.get("chart_id"),
-                            "title": chart.get("title", "Dashboard Visual"),
-                            "business_meaning": chart.get("metadata", {}).get("short_ai_insight", ""),
-                            "suggested_chart_type": visual.get("applied_spec", {}).get("chart_type", ""),
-                            "fields_used": chart.get("fields", []),
-                            "spec": visual.get("applied_spec", {}),
-                            "short_ai_insight": chart.get("metadata", {}).get("short_ai_insight", ""),
-                        },
-                    )
-                    if result.get("added"):
-                        st.success("Current visual added to storyboard for this session.")
-                    else:
-                        st.info("This visual already exists in the storyboard.")
-                if card_cols[1].button("Add to report", key="add_current_visual_report", use_container_width=True):
-                    if not chart.get("chart_id"):
-                        st.warning("This visual is missing a chart ID and cannot be added to Reports.")
-                    else:
-                        try:
-                            registration = client.register_visual(dataset_id, chart)
-                            if registration.get("registered"):
-                                st.success("Visual added to Reports.")
-                            else:
-                                st.info("Visual already exists in Reports and was reused.")
-                        except requests.RequestException as exc:
-                            _warn_backend_unavailable("Adding visual to Reports")
-                card_cols[2].caption("Use Reports to export selected visuals as PDF, PPTX, PNG, JSON, CSV, or Excel.")
-                st.caption(
-                    "Known issue: legend, tooltip, and number format options may not be fully applied by the renderer, "
-                    "so exports can differ from the Dashboard Studio preview."
+
+            filtered_rows = chart.get("metadata", {}).get("filtered_rows")
+            short_insight = chart.get("metadata", {}).get(
+                "short_ai_insight",
+                "Use this visual to compare business performance across the selected fields.",
+            )
+
+            st.markdown('<div class="ds-card">', unsafe_allow_html=True)
+            st.markdown(
+                """
+                <div class="ds-card-header">
+                    <div class="ds-card-title">{title}</div>
+                    <div class="ds-card-subtitle">{subtitle}</div>
+                </div>
+                <div class="ds-card-body">
+                """.format(
+                    title=html.escape(str(chart.get("title", "Dashboard Visual"))),
+                    subtitle=html.escape(str(short_insight)),
+                ),
+                unsafe_allow_html=True,
+            )
+
+            if filtered_rows == 0:
+                st.info("No data matches the selected filters for this visual.")
+            else:
+                st.plotly_chart(fig, use_container_width=True)
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            st.markdown('<div class="ds-card-footer">', unsafe_allow_html=True)
+
+            # Footer row: actions + insights.
+            card_cols = st.columns([1, 1, 1.2])
+            if card_cols[0].button("Storyboard", key="add_current_visual_storyboard", use_container_width=True):
+                result = add_storyboard_entry(
+                    st.session_state[storyboard_key],
+                    {
+                        "chart_id": chart.get("chart_id"),
+                        "title": chart.get("title", "Dashboard Visual"),
+                        "business_meaning": chart.get("metadata", {}).get("short_ai_insight", ""),
+                        "suggested_chart_type": visual.get("applied_spec", {}).get("chart_type", ""),
+                        "fields_used": chart.get("fields", []),
+                        "spec": visual.get("applied_spec", {}),
+                        "short_ai_insight": chart.get("metadata", {}).get("short_ai_insight", ""),
+                    },
                 )
+                if result.get("added"):
+                    st.success("Current visual added to storyboard for this session.")
+                else:
+                    st.info("This visual already exists in the storyboard.")
+
+            if card_cols[1].button("Add to report", key="add_current_visual_report", use_container_width=True):
+                if not chart.get("chart_id"):
+                    st.warning("This visual is missing a chart ID and cannot be added to Reports.")
+                else:
+                    try:
+                        registration = client.register_visual(dataset_id, chart)
+                        if registration.get("registered"):
+                            st.success("Visual added to Reports.")
+                        else:
+                            st.info("Visual already exists in Reports and was reused.")
+                    except requests.RequestException:
+                        _warn_backend_unavailable("Adding visual to Reports")
+
+            card_cols[2].caption("Use Reports to export selected visuals as PDF, PPTX, PNG, JSON, CSV, or Excel.")
+            st.caption(
+                "Known issue: legend, tooltip, and number format options may not be fully applied by the renderer, "
+                "so exports can differ from the Dashboard Studio preview."
+            )
+
+            # Confidence: we do not compute/regenerate KPI confidence. We show a safe placeholder from metadata when present.
+            confidence_val = chart.get("metadata", {}).get("confidence")
+            if confidence_val is None:
+                confidence_val = "—"
+            st.markdown(f'<div class="ds-confidence"><b>Confidence:</b> {html.escape(str(confidence_val))}</div>', unsafe_allow_html=True)
+
+            st.markdown("</div></div>", unsafe_allow_html=True)
+
             storyboard = st.session_state.get(storyboard_key, [])
             if storyboard:
                 with st.expander(f"Storyboard ({len(storyboard)} visuals)", expanded=False):

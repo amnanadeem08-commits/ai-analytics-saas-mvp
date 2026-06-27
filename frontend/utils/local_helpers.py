@@ -415,7 +415,9 @@ def _apply_local_cleaning_rules(df: pd.DataFrame, payload: dict) -> tuple[pd.Dat
     rows_before, columns_before = cleaned.shape
     changes: list[dict] = []
     duplicates_before = int(cleaned.duplicated().sum())
-    cleaned = cleaned.drop_duplicates()
+    remove_duplicates = bool(payload.get("remove_duplicates", True))
+    if duplicates_before and remove_duplicates:
+        cleaned = cleaned.drop_duplicates()
 
     numeric_strategy = payload.get("numeric_missing_strategy", "median")
     categorical_strategy = payload.get("categorical_missing_strategy", "mode")
@@ -478,6 +480,7 @@ def _apply_local_cleaning_rules(df: pd.DataFrame, payload: dict) -> tuple[pd.Dat
     missing_after = int(cleaned.isna().sum().sum())
     cells_before = max(rows_before * columns_before, 1)
     cells_after = max(cleaned.shape[0] * cleaned.shape[1], 1)
+    duplicates_removed = duplicates_before if (duplicates_before and remove_duplicates) else 0
     result = {
         "rows_before": rows_before,
         "rows_after": int(cleaned.shape[0]),
@@ -485,7 +488,7 @@ def _apply_local_cleaning_rules(df: pd.DataFrame, payload: dict) -> tuple[pd.Dat
         "columns_after": int(cleaned.shape[1]),
         "completeness_before_pct": round((1 - missing_before / cells_before) * 100, 2),
         "completeness_after_pct": round((1 - missing_after / cells_after) * 100, 2),
-        "duplicates_removed": duplicates_before,
+        "duplicates_removed": duplicates_removed,
         "high_missing_columns": [],
         "outlier_flags": {},
         "changes": changes or [{"column": "Dataset", "change": "No missing values or duplicates required changes", "rows_affected": 0}],
@@ -813,6 +816,27 @@ def _zscore_outlier_notes(df: pd.DataFrame, numeric_columns: list[str]) -> list[
         if count:
             notes.append(f"{column}: {count:,} records exceed |z| > 3 and may represent unusually extreme values.")
     return notes
+def _local_storyboard_chart_specs(df: pd.DataFrame, dataset_id: str) -> list[dict]:
+    """
+    Restore missing helper used by _add_recommended_visual_slide.
+    Produces storyboard chart "spec refs" (chart_id + auto_index into _local_default_figures).
+    No mutation, deterministic per dataset content.
+    """
+    figures = _local_default_figures(df)
+    # Return up to 6 chart candidates to allow slide to pick top 4.
+    charts: list[dict] = []
+    for idx, fig in enumerate(figures[:6]):
+        charts.append(
+            {
+                "chart_id": f"local_chart_{dataset_id}_{idx}",
+                "title": fig.get("title") or "Local storyboard visual",
+                "kind": fig.get("kind") or "Visual",
+                "auto_index": idx,
+            }
+        )
+    return charts
+
+
 def _add_recommended_visual_slide(items: list[dict], df: pd.DataFrame, dataset_id: str) -> list[dict]:
     charts = _local_storyboard_chart_specs(df, dataset_id)
     if not charts:

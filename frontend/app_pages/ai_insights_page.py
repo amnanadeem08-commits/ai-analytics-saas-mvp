@@ -21,6 +21,9 @@ from frontend.components.chart_components import (
 )
 from frontend.components.insight_cards import render_insight
 from frontend.components.metric_cards import render_summary_metrics
+from backend.services.ai_business_insight_service import build_ai_business_insights_from_data_insights
+from backend.services.data_insights_service import build_data_insights
+from frontend.components.ai_business_insight_cards import render_ai_business_insight_cards
 from frontend.components.ai_insight_panel import render_business_insights_overview
 from frontend.components.storyboard_session import add_storyboard_entry
 from frontend.utils.backend_utils import (
@@ -161,6 +164,8 @@ def render_ai_insights(client: BackendClient) -> None:
             st.info("Upload a dataset first from Dataset Preview.")
             return
         st.info(LOCAL_MODE_INFO_MESSAGE)
+        data_insights_payload = build_data_insights(local_df)
+        render_ai_business_insight_cards(build_ai_business_insights_from_data_insights(data_insights_payload))
         summary = _local_summary(local_df)
         numeric_cols = local_df.select_dtypes(include="number").columns.tolist()
         top_cards = st.columns(4)
@@ -190,12 +195,15 @@ def render_ai_insights(client: BackendClient) -> None:
 
     try:
         insight_payload = client.get_insights(dataset_id)
+        ai_business_payload = client.get_ai_business_insights(dataset_id)
         domain_payload = client.get_domain_intelligence(dataset_id)
         dashboard_payload = client.get_dashboard(dataset_id)
         insights = insight_payload.get("insights", [])
     except requests.RequestException as exc:
         _warn_backend_unavailable("Insights")
         return
+
+    render_ai_business_insight_cards(ai_business_payload)
 
     detection = domain_payload.get("detection", {})
     summary = dashboard_payload.get("summary", {})

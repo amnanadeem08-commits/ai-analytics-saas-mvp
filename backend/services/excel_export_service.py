@@ -189,6 +189,99 @@ def _add_chart(sheet, start_row: int, title: str, labels: list[str], values: lis
     return start_row + max(len(values) + 2, 24)
 
 
+
+def _storyboard_section(payload: dict[str, Any], section_id: str) -> dict[str, Any]:
+    return next((section for section in payload.get("sections", []) if section.get("section_id") == section_id), {})
+
+
+def _write_storyboard_summary(wb, report: dict[str, Any]) -> None:
+    storyboard = report.get("executive_storyboard", {})
+    ws = wb.create_sheet("Storyboard Summary", 0)
+    ws.merge_cells("A1:E1")
+    ws["A1"] = "Executive Storyboard Summary"
+    ws["A1"].font = Font(size=16, bold=True, color="1F4E78")
+    ws["A2"] = f"Dataset: {report.get('dataset_id', '')}"
+    row = 4
+
+    summary = _storyboard_section(storyboard, "executive_summary").get("content", {})
+    readiness = summary.get("dataset_readiness", {})
+    ws.cell(row=row, column=1, value="Executive Summary").fill = SECTION_FILL
+    ws.cell(row=row, column=1).font = HEADER_FONT
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
+    row += 1
+    for label, value in [
+        ("Dataset Readiness", f"{readiness.get('score', 0)}/100"),
+        ("Overall Business Health", f"{summary.get('overall_business_health', 0)}/100"),
+        ("Executive Summary", summary.get("executive_summary", "")),
+        ("Top Opportunity", summary.get("top_opportunity", "")),
+        ("Biggest Risk", summary.get("biggest_risk", "")),
+    ]:
+        ws.cell(row=row, column=1, value=label).font = Font(bold=True)
+        ws.cell(row=row, column=2, value=value)
+        ws.merge_cells(start_row=row, start_column=2, end_row=row, end_column=5)
+        row += 1
+    row += 1
+
+    kpis = _storyboard_section(storyboard, "kpi_overview").get("kpis", [])
+    ws.cell(row=row, column=1, value="KPI Summary").fill = SECTION_FILL
+    ws.cell(row=row, column=1).font = HEADER_FONT
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
+    row += 1
+    headers = ["KPI", "Value", "Status", "Context"]
+    for idx, header in enumerate(headers, start=1):
+        ws.cell(row=row, column=idx, value=header).fill = HEADER_FILL
+        ws.cell(row=row, column=idx).font = HEADER_FONT
+    row += 1
+    for card in kpis[:12]:
+        ws.cell(row=row, column=1, value=card.get("label", ""))
+        ws.cell(row=row, column=2, value=card.get("value", ""))
+        ws.cell(row=row, column=3, value=card.get("status", ""))
+        ws.cell(row=row, column=4, value=card.get("business_context", card.get("description", "")))
+        row += 1
+    row += 1
+
+    cards = _storyboard_section(storyboard, "ai_business_insights").get("cards", [])
+    ws.cell(row=row, column=1, value="AI Business Insights").fill = SECTION_FILL
+    ws.cell(row=row, column=1).font = HEADER_FONT
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
+    row += 1
+    headers = ["Type", "Title", "Evidence", "Impact", "Recommendation"]
+    for idx, header in enumerate(headers, start=1):
+        ws.cell(row=row, column=idx, value=header).fill = HEADER_FILL
+        ws.cell(row=row, column=idx).font = HEADER_FONT
+    row += 1
+    for card in cards:
+        ws.cell(row=row, column=1, value=card.get("type", ""))
+        ws.cell(row=row, column=2, value=card.get("title", ""))
+        ws.cell(row=row, column=3, value=card.get("supporting_evidence", ""))
+        ws.cell(row=row, column=4, value=card.get("expected_business_impact", ""))
+        ws.cell(row=row, column=5, value=card.get("executive_recommendation", ""))
+        row += 1
+    row += 1
+
+    recs = _storyboard_section(storyboard, "executive_recommendations").get("recommendations", [])
+    ws.cell(row=row, column=1, value="Executive Recommendations").fill = SECTION_FILL
+    ws.cell(row=row, column=1).font = HEADER_FONT
+    ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
+    row += 1
+    headers = ["Priority", "Business Value", "Difficulty", "Expected Impact", "Recommendation"]
+    for idx, header in enumerate(headers, start=1):
+        ws.cell(row=row, column=idx, value=header).fill = HEADER_FILL
+        ws.cell(row=row, column=idx).font = HEADER_FONT
+    row += 1
+    for rec in recs:
+        ws.cell(row=row, column=1, value=rec.get("priority", ""))
+        ws.cell(row=row, column=2, value=rec.get("business_value", ""))
+        ws.cell(row=row, column=3, value=rec.get("difficulty", ""))
+        ws.cell(row=row, column=4, value=rec.get("expected_impact", ""))
+        ws.cell(row=row, column=5, value=rec.get("recommendation", ""))
+        row += 1
+    for row_cells in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=5):
+        for cell in row_cells:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            cell.border = THIN_BORDER
+    _autofit_columns(ws)
+
 def build_executive_excel(
     report: dict[str, Any],
     raw_df: pd.DataFrame,
@@ -206,6 +299,8 @@ def build_executive_excel(
         wb = writer.book
         if "Sheet" in wb.sheetnames and len(wb.sheetnames) == 1:
             wb.remove(wb["Sheet"])
+        if package == "storyboard":
+            _write_storyboard_summary(wb, report)
         summary_ws = wb.create_sheet("Dashboard Summary")
         summary_ws.merge_cells("A1:D1")
         summary_ws["A1"] = report.get("branding", {}).get("report_title", "Executive Dashboard Summary")
@@ -228,7 +323,7 @@ def build_executive_excel(
             if new_row != chart_row:
                 chart_added += 1
                 chart_row = new_row
-        if chart_added == 0:
+        if chart_added == 0 and not selected:
             title, labels, values, fallback_type = _fallback_chart_series(raw_df)
             _add_chart(visual_ws, chart_row, title, labels, values, fallback_type)
 

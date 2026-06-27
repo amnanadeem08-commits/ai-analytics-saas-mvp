@@ -49,8 +49,11 @@ def clean_dataset(dataset_id: str, options: CleaningOptions, datasets_dir: Path)
         cleaned = cleaned.loc[:, ~cleaned.isna().all(axis=0)]
 
     duplicates_before = int(cleaned.duplicated().sum())
-    if duplicates_before:
+    remove_duplicates = bool(getattr(options, "remove_duplicates", True))
+    duplicates_removed = 0
+    if duplicates_before and remove_duplicates:
         cleaned = cleaned.drop_duplicates(keep="first")
+        duplicates_removed = duplicates_before
 
     object_cols = cleaned.select_dtypes(include=["object"]).columns.tolist()
     datetime_cols = cleaned.select_dtypes(include=["datetime", "datetimetz"]).columns.tolist()
@@ -160,6 +163,18 @@ def clean_dataset(dataset_id: str, options: CleaningOptions, datasets_dir: Path)
             cleaned = cleaned.loc[~mask].copy()
             changes.append({"column": col, "action": "outliers", "method": "remove_rows", "count": flagged})
 
+    # Record duplicates decision/result in the change log consistently.
+    if duplicates_before:
+        action_method = "drop_duplicates" if remove_duplicates else "kept_duplicates"
+        changes.append(
+            {
+                "column": "__duplicates__",
+                "action": "duplicates",
+                "method": action_method,
+                "count": duplicates_before,
+            }
+        )
+
     csv_name, xlsx_name = _save_cleaned_outputs(dataset_id, cleaned, datasets_dir)
     completeness_after = _safe_completeness(cleaned)
 
@@ -171,7 +186,7 @@ def clean_dataset(dataset_id: str, options: CleaningOptions, datasets_dir: Path)
         "rows_after": int(len(cleaned)),
         "columns_before": cols_before,
         "columns_after": int(len(cleaned.columns)),
-        "duplicates_removed": duplicates_before,
+        "duplicates_removed": duplicates_removed,
         "fully_empty_rows_removed": empty_rows,
         "fully_empty_columns_removed": empty_cols,
         "completeness_before_pct": completeness_before,

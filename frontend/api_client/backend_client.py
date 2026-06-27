@@ -225,6 +225,24 @@ class BackendClient:
         response.raise_for_status()
         return response.json()
 
+    def get_data_insights(self, dataset_id: str) -> dict[str, Any]:
+        path = endpoints.DATA_INSIGHTS.format(dataset_id=dataset_id)
+        response = requests.get(self._url(path), timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+    def get_ai_business_insights(self, dataset_id: str) -> dict[str, Any]:
+        path = endpoints.AI_BUSINESS_INSIGHTS.format(dataset_id=dataset_id)
+        response = requests.get(self._url(path), timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+    def get_executive_storyboard(self, dataset_id: str) -> dict[str, Any]:
+        path = endpoints.EXECUTIVE_STORYBOARD.format(dataset_id=dataset_id)
+        response = requests.get(self._url(path), timeout=30)
+        response.raise_for_status()
+        return response.json()
+
     def get_domain_intelligence(self, dataset_id: str) -> dict[str, Any]:
         path = endpoints.DOMAIN_INTELLIGENCE.format(dataset_id=dataset_id)
         response = requests.get(self._url(path), timeout=30)
