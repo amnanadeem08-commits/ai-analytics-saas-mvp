@@ -8,19 +8,10 @@ import requests
 import streamlit as st
 
 from frontend.api_client.backend_client import BackendClient
+from frontend.themes.theme_manager import css_variable_block, get_theme, legacy_preset, list_themes
 
 
-THEME_PRESETS = [
-    {"name": "power_bi_professional", "display_name": "Executive Blue", "background": "#F5F7FA", "palette": ["#0078D4", "#004E8C", "#00B7C3", "#F2C811", "#107C10"], "description": "Power BI-style blue palette for executive KPI dashboards."},
-    {"name": "financial_intelligence", "display_name": "Emerald Finance", "background": "#07130D", "palette": ["#22C55E", "#16A34A", "#84CC16", "#38BDF8", "#FACC15"], "description": "Finance-ready greens with high-contrast chart accents."},
-    {"name": "startup_modern", "display_name": "Purple Modern", "background": "#F8FAFF", "palette": ["#2563EB", "#7C3AED", "#06B6D4", "#10B981", "#F97316"], "description": "Modern pitch-deck palette with purple and blue accents."},
-    {"name": "boardroom_dark", "display_name": "Dark Corporate", "background": "#05070B", "palette": ["#60A5FA", "#A78BFA", "#34D399", "#FBBF24", "#F87171"], "description": "Dark boardroom theme for presentation and wall displays."},
-    {"name": "minimal_clean", "display_name": "Minimal Gray", "background": "#FAFAFA", "palette": ["#27272A", "#52525B", "#71717A", "#0EA5E9", "#16A34A"], "description": "Clean neutral palette for lightweight business reports."},
-    {"name": "marketing_dashboard", "display_name": "Marketing Dashboard", "background": "#F8FAFC", "palette": ["#DB2777", "#F97316", "#0EA5E9", "#22C55E", "#7C3AED"], "description": "Campaign-ready palette for funnel, channel, and conversion reporting."},
-    {"name": "finance_dashboard", "display_name": "Finance Dashboard", "background": "#F7FBF8", "palette": ["#047857", "#0F766E", "#84CC16", "#0284C7", "#CA8A04"], "description": "Executive finance template with controlled greens and signal colors."},
-    {"name": "healthcare_dashboard", "display_name": "Healthcare Dashboard", "background": "#F8FCFF", "palette": ["#0E7490", "#2563EB", "#14B8A6", "#F59E0B", "#DC2626"], "description": "Clinical operations theme for quality, access, and risk monitoring."},
-    {"name": "sales_dashboard", "display_name": "Sales Dashboard", "background": "#FFFDF7", "palette": ["#2563EB", "#16A34A", "#F59E0B", "#EF4444", "#7C3AED"], "description": "Pipeline and performance theme for revenue teams."},
-]
+THEME_PRESETS = [legacy_preset(theme) for theme in list_themes()]
 
 DASHBOARD_SETTING_DEFAULTS = {
     "dashboard_template_type": "Executive Dashboard",
@@ -39,10 +30,10 @@ DEFAULT_BRANDING = {
     "report_subtitle": "Upload a dataset to generate board-ready KPIs, charts, and insights.",
     "footer_note": "",
     "logo_url": "",
-    "primary_color": "var(--brand-primary)",
-    "secondary_color": "var(--brand-secondary)",
-    "accent_color": "var(--brand-accent)",
-    "theme_name": "power_bi_professional",
+    "primary_color": "#174A7C",
+    "secondary_color": "#243B53",
+    "accent_color": "#B88322",
+    "theme_name": "executive",
 }
 
 
@@ -55,21 +46,20 @@ def _sync_branding_state(branding: dict, palette: list[str] | None = None, backg
         if color not in resolved_palette:
             resolved_palette.append(color)
     st.session_state["branding"] = merged
-    st.session_state["selected_theme"] = merged.get("theme_name", "power_bi_professional")
+    st.session_state["selected_theme"] = merged.get("theme_name", "executive")
     st.session_state["primary_color"] = merged["primary_color"]
     st.session_state["secondary_color"] = merged["secondary_color"]
-    st.session_state["background_color"] = background or st.session_state.get("background_color", "#F5F7FA")
+    st.session_state["background_color"] = background or get_theme(st.session_state.get("selected_theme")).background
     st.session_state["chart_palette"] = resolved_palette
 
 def _apply_branding_theme() -> None:
     branding = st.session_state.get("branding", DEFAULT_BRANDING)
-    palette = st.session_state.get("chart_palette") or [
-        branding["primary_color"], branding["secondary_color"], branding["accent_color"]
-    ]
+    active_theme = get_theme(st.session_state.get("selected_theme") or branding.get("theme_name"))
+    palette = st.session_state.get("chart_palette") or active_theme.palette
     template_name = "ai_analytics_brand"
     pio.templates[template_name] = go.layout.Template(
         layout={
-            "font": {"family": "Inter, Segoe UI, Arial", "color": "#172033"},
+            "font": {"family": active_theme.typography.font_family, "color": active_theme.text},
             "colorway": palette,
             "paper_bgcolor": "rgba(0,0,0,0)",
             "plot_bgcolor": "rgba(0,0,0,0)",
@@ -80,30 +70,12 @@ def _apply_branding_theme() -> None:
         f"""
         <style>
         :root {{
-            --brand-primary: {branding['primary_color']};
-            --brand-secondary: {branding['secondary_color']};
-            --brand-accent: {branding['accent_color']};
-            --brand-font: Inter, Segoe UI, Arial, sans-serif;
-            --ui-surface: {st.session_state.get("background_color", "#F5F7FA")};
-            --text-color: #0F172A;
-            --text-subtle: #475569;
-            --text-muted: #64748B;
-            --text-muted-soft: #94A3B8;
-            --surface-border: #E2E8F0;
-            --ui-success: #059669;
-            --ui-success-strong: #10B981;
-            --ui-info: {branding['primary_color']};
-            --ui-info-strong: {branding['secondary_color']};
-            --ui-warning: #D97706;
-            --ui-warning-strong: #F59E0B;
-            --ui-danger: #DC2626;
-            --ui-danger-strong: #EF4444;
-            --ui-accent: {branding['accent_color']};
-            --ui-accent-strong: #6366F1;
+{css_variable_block(active_theme.name, branding)}
         }}
         html, body, .stApp, .stMarkdown, .stDataFrame, .stButton button, .stTextInput input, .stSelectbox div {{
             font-family: var(--brand-font);
         }}
+        .stApp {{ background: var(--ui-surface); color: var(--text-color); }}
         span.material-symbols-rounded, span.material-symbols-outlined {{
             font-family: "Material Symbols Rounded", "Material Symbols Outlined" !important;
         }}
@@ -118,7 +90,7 @@ def _apply_branding_theme() -> None:
             color: var(--text-color); background: color-mix(in srgb, var(--brand-primary) 12%, transparent); border: 1px solid color-mix(in srgb, var(--brand-primary) 22%, transparent);
             font-size: .78rem; font-weight: 700;
         }}
-        .rag-box {{ border-left: 5px solid var(--brand-accent); padding: .85rem 1rem; border-radius: 14px; background: rgba(255,255,255,.82); }}
+        .rag-box {{ border-left: 5px solid var(--brand-accent); padding: .85rem 1rem; border-radius: var(--theme-radius); background: var(--surface-card); }}
         div.stButton > button[kind="primary"], div.stFormSubmitButton > button[kind="primary"] {{
             background: var(--brand-primary) !important;
             border-color: var(--brand-primary) !important;
@@ -126,21 +98,23 @@ def _apply_branding_theme() -> None:
         }}
         div.stButton > button, div.stDownloadButton > button {{
             border-color: color-mix(in srgb, var(--brand-primary) 42%, var(--surface-border)) !important;
+            border-radius: var(--theme-radius) !important;
         }}
         div[data-testid="stMetric"], .ai-card {{
             border: 1px solid color-mix(in srgb, var(--brand-primary) 24%, var(--surface-border));
             border-top: 4px solid var(--brand-accent);
-            background: color-mix(in srgb, var(--ui-surface) 88%, #FFFFFF);
-            border-radius: 8px;
+            background: var(--surface-card);
+            border-radius: var(--theme-radius);
             padding: .75rem;
+            box-shadow: var(--theme-shadow);
         }}
         div[data-testid="stMetricValue"] {{ color: var(--brand-primary); }}
         div[data-testid="stMetricDelta"] {{ color: var(--ui-success); }}
+        [data-testid="stSidebar"] {{ background: color-mix(in srgb, var(--ui-surface) 84%, var(--surface-card)); }}
         </style>
         """,
         unsafe_allow_html=True,
     )
-
 def _render_palette_swatches(palette: list[str]) -> str:
     """Render inline colour swatch HTML for a palette."""
     swatches = "".join(f'<span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:{c};margin-right:3px;border:1px solid rgba(0,0,0,0.08)"></span>' for c in palette)
@@ -249,7 +223,7 @@ def get_active_branding(client: BackendClient) -> dict:
             "primary_color": "#118DFF",
             "secondary_color": "#12239E",
             "accent_color": "#E66C37",
-            "theme_name": "power_bi_professional",
+            "theme_name": "executive",
         }
 
 def render_branding_editor(client: BackendClient, branding: dict) -> None:
@@ -308,7 +282,7 @@ def render_branding_editor(client: BackendClient, branding: dict) -> None:
                 "primary_color": "#118DFF",
                 "secondary_color": "#12239E",
                 "accent_color": "#E66C37",
-                "theme_name": "power_bi_professional",
+                "theme_name": "executive",
             }
             _sync_branding_state({**DEFAULT_BRANDING, **reset_payload}, ["#0078D4", "#004E8C", "#00B7C3", "#F2C811", "#107C10"], "#F5F7FA")
             try:

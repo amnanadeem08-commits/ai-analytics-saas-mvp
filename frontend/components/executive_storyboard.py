@@ -172,16 +172,16 @@ def _inject_styles() -> None:
         """
         <style>
         :root {
-            --exec-ink: #172033;
-            --exec-muted: #5f6b7a;
-            --exec-soft: #eef2f6;
-            --exec-paper: #ffffff;
-            --exec-panel: #f8fafc;
-            --exec-line: #d9e1ea;
-            --exec-blue: #174a7c;
-            --exec-teal: #1f8a89;
-            --exec-gold: #b88322;
-            --exec-shadow: 0 18px 42px rgba(23,32,51,.10);
+            --exec-ink: var(--text-color);
+            --exec-muted: var(--text-muted);
+            --exec-soft: var(--surface-alt);
+            --exec-paper: var(--surface-card);
+            --exec-panel: var(--ui-surface);
+            --exec-line: var(--surface-border);
+            --exec-blue: var(--brand-primary);
+            --exec-teal: var(--ui-success);
+            --exec-gold: var(--brand-accent);
+            --exec-shadow: var(--theme-shadow);
         }
 
         .exec-story-wrap {
@@ -204,7 +204,7 @@ def _inject_styles() -> None:
             grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr);
             gap: 26px;
             align-items: stretch;
-            background: linear-gradient(135deg, #ffffff 0%, #f7f9fc 58%, #edf4f6 100%);
+            background: linear-gradient(135deg, var(--surface-card) 0%, var(--ui-surface) 58%, var(--surface-alt) 100%);
         }
 
         .exec-cover h1 {
@@ -233,7 +233,7 @@ def _inject_styles() -> None:
 
         .exec-cover-panel {
             border-left: 4px solid var(--exec-blue);
-            background: rgba(255,255,255,.72);
+            background: color-mix(in srgb, var(--surface-card) 72%, transparent);
             padding: 20px;
             display: grid;
             gap: 14px;
@@ -337,7 +337,7 @@ def _inject_styles() -> None:
         .exec-insight-card, .exec-rec-strip {
             border: 1px solid var(--exec-line);
             border-radius: 8px;
-            background: #fff;
+            background: var(--surface-card);
             padding: 15px;
             margin-bottom: 12px;
         }
