@@ -230,7 +230,13 @@ def render_dashboard(client: BackendClient) -> None:
 
     with st.expander("Column profile", expanded=False):
         col_types = summary.get("column_types", {})
-        st.json(col_types)
+        if col_types:
+            col_type_rows = []
+            for category, columns in col_types.items():
+                for column in columns:
+                    col_type_rows.append({"column": column, "detected_type": category.replace("_", " ")})
+            if col_type_rows:
+                st.dataframe(pd.DataFrame(col_type_rows), use_container_width=True, hide_index=True)
         numeric_summary = summary.get("numeric_summary", {})
         if numeric_summary:
             st.dataframe(pd.DataFrame(numeric_summary).T, use_container_width=True)
@@ -388,12 +394,12 @@ def _render_kpi_cards(
     for offset in range(0, min(len(cards), 8), 4):
         cols = st.columns(4)
         for card_index, (col, card) in enumerate(zip(cols, cards[offset : offset + 4]), start=offset):
-            value = card.get("value", "")
-            if card.get("format") == "percent" and isinstance(value, (int, float)):
+            value = card.get("formatted_value", card.get("value", ""))
+            if not card.get("formatted_value") and card.get("format") == "percent" and isinstance(value, (int, float)):
                 value = f"{value}%"
             delta = card.get("delta_percentage")
             trend_arrow = _safe_trend_text(str(card.get("trend_arrow", "->")))
-            delta_text = "No prior comparison" if delta is None else f"{trend_arrow} {delta}%".strip()
+            delta_text = "" if delta is None else f"{trend_arrow} {delta}%".strip()
             color = card.get("status_color") or muted
             context = card.get("business_context") or card.get("description") or ""
             sparkline = _sparkline_html(card.get("sparkline", []))
@@ -412,7 +418,7 @@ def _render_kpi_cards(
                         <div style="color: {color};">{icon}</div>
                     </div>
                     <div class="kpi-value">{html.escape(str(value))}</div>
-                    <div class="kpi-delta" style="color: {color};">{delta_text}</div>
+                    {f'<div class="kpi-delta" style="color: {color};">{html.escape(delta_text)}</div>' if delta_text else ''}
                     <div style="color: {color};">{sparkline}</div>
                     <div class="kpi-meta">
                         <span style="color: {color};"><span class="risk-dot"></span>{risk.title()}</span>

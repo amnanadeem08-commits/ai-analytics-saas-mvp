@@ -279,6 +279,44 @@ def _heatmap_for_correlation(df: pd.DataFrame, numeric_columns: list[str], theme
     )
 
 
+def _fallback_chart(df: pd.DataFrame, theme: AnalyticsTheme) -> dict[str, Any] | None:
+    categorical_candidates = [
+        column
+        for column in df.columns
+        if df[column].nunique(dropna=True) > 1 and not pd.api.types.is_numeric_dtype(df[column])
+    ]
+    numeric_candidates = [column for column in df.columns if pd.api.types.is_numeric_dtype(df[column])]
+
+    if categorical_candidates:
+        column = categorical_candidates[0]
+        return _bar_for_category(df, column, theme)
+
+    if numeric_candidates:
+        column = numeric_candidates[0]
+        return _histogram_for_numeric(df, column, theme)
+
+    labels = [str(column) for column in df.columns[:20]]
+    values = [int(df[column].notna().sum()) for column in df.columns[:20]]
+    if len(labels) >= 2:
+        title = "Column Completeness"
+        return _spec(
+            _chart_id("bar", "column_completeness"),
+            title,
+            "bar",
+            "comparisons",
+            labels,
+            [{"type": "bar", "x": labels, "y": values, "name": "Non-missing records", "marker": {"color": theme.palette[: len(labels)]}}],
+            _layout(title, "Column", "Non-missing records", theme.name),
+            {
+                "aggregation": "count",
+                "subtitle": "Fallback chart to keep the visual pipeline populated.",
+                "statistical_explanation": "This chart shows non-missing row counts per column when no richer chart pattern is available.",
+            },
+            theme,
+        )
+    return None
+
+
 def generate_chart_specs(df: pd.DataFrame, theme_name: str | None = None) -> list[dict[str, Any]]:
     theme = theme_manager.get_theme(theme_name)
     column_types = detect_column_types(df)
@@ -308,5 +346,10 @@ def generate_chart_specs(df: pd.DataFrame, theme_name: str | None = None) -> lis
         heatmap = _heatmap_for_correlation(df, numeric_columns, theme)
         if heatmap:
             charts.append(heatmap)
+
+    if not charts:
+        fallback = _fallback_chart(df, theme)
+        if fallback:
+            charts.append(fallback)
 
     return charts

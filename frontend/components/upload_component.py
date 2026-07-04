@@ -15,7 +15,7 @@ def render_upload(client: BackendClient) -> None:
         try:
             result = client.upload_csv(uploaded_file)
             st.success(result["message"])
-            st.code(result["dataset_id"])
+            st.caption(f"Dataset ID: {result['dataset_id']}")
             st.session_state["selected_dataset_id"] = result["dataset_id"]
         except HTTPError:
             st.error("Upload failed. Please check the file format and try again.")

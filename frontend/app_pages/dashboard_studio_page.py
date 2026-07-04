@@ -56,6 +56,7 @@ from frontend.utils.local_helpers import (
     _render_local_visual,
     select_dataset,
 )
+from frontend.utils.kpi_helpers import build_default_kpis
 
 
 def _dashboard_studio_css() -> None:
@@ -126,367 +127,249 @@ def _dashboard_studio_css() -> None:
         unsafe_allow_html=True,
     )
 
+def _field_names(items: list[dict]) -> list[str]:
+    return [item.get("name") for item in items if item.get("name")]
+
+
+def _display_value(card: dict) -> str:
+    return str(card.get("formatted_value", card.get("value", "-")))
+
+
+def _local_quality(df: pd.DataFrame) -> dict:
+    rows = int(len(df))
+    cols = int(len(df.columns))
+    cells = max(rows * cols, 1)
+    missing = int(df.isna().sum().sum())
+    duplicates = int(df.duplicated().sum())
+    completeness = round((1 - missing / cells) * 100, 2)
+    return {"score": completeness, "grade": "A" if completeness >= 95 and duplicates == 0 else "B" if completeness >= 85 else "C" if completeness >= 70 else "D", "missing_values": missing, "duplicate_rows": duplicates, "row_count": rows, "column_count": cols}
+
+
+def _auto_chart_specs_from_schema(schema: dict) -> list[dict]:
+    dimensions = _field_names(schema.get("dimensions", []))
+    measures = _field_names(schema.get("measures", []))
+    date_columns = schema.get("datetime_columns", []) or []
+    specs: list[dict] = []
+    if dimensions and measures:
+        specs.append({"chart_type": "bar", "dimension": dimensions[0], "measure": measures[0], "aggregation": "auto", "sort": "descending", "title": f"{measures[0]} by {dimensions[0]}", "data_labels": True, "filters": {}})
+    if date_columns and measures:
+        specs.append({"chart_type": "line", "dimension": date_columns[0], "measure": measures[0], "aggregation": "auto", "sort": "ascending", "title": f"{measures[0]} trend", "data_labels": True, "filters": {}})
+    if len(dimensions) > 1:
+        specs.append({"chart_type": "bar", "dimension": dimensions[1], "measure": None, "aggregation": "count", "sort": "descending", "title": f"Records by {dimensions[1]}", "data_labels": True, "filters": {}})
+    if dimensions and len(measures) > 1:
+        specs.append({"chart_type": "horizontal_bar", "dimension": dimensions[0], "measure": measures[1], "aggregation": "auto", "sort": "descending", "title": f"{measures[1]} by {dimensions[0]}", "data_labels": True, "filters": {}})
+    if dimensions:
+        specs.append({"chart_type": "table", "dimension": dimensions[0], "measure": measures[0] if measures else None, "aggregation": "auto" if measures else "count", "sort": "descending", "title": "Top records summary", "data_labels": True, "filters": {}})
+    return specs[:5]
+
+
+def _slicer_summaries_from_schema(schema: dict) -> list[dict]:
+    slicers = []
+    for field in schema.get("semantic_layer", []):
+        name = field.get("name")
+        role = field.get("semantic_role") or field.get("semantic_type")
+        unique = int(field.get("unique_count", 0) or 0)
+        if role in {"date", "datetime"}:
+            slicers.append({"field": name, "type": "date_range", "label": str(name).replace("_", " ").title()})
+        elif role in {"dimension", "categorical"} and unique <= 25:
+            slicers.append({"field": name, "type": "categorical", "label": str(name).replace("_", " ").title()})
+        elif role in {"measure", "numeric"} and unique <= 100:
+            slicers.append({"field": name, "type": "numeric_range", "label": str(name).replace("_", " ").title()})
+    return slicers[:8]
+
+
+def _build_local_auto_dashboard(df: pd.DataFrame, dataset_id: str, schema: dict) -> dict:
+    specs = _auto_chart_specs_from_schema(schema)
+    charts = []
+    for index, spec in enumerate(specs):
+        visual = _render_local_visual(df, spec)
+        chart = visual.get("chart", {})
+        chart["chart_id"] = chart.get("chart_id") or f"local_auto_{index}"
+        chart["chart_type"] = spec.get("chart_type")
+        chart["columns"] = [field for field in [spec.get("dimension"), spec.get("measure")] if field]
+        chart["spec"] = spec
+        charts.append(chart)
+    kpis = build_default_kpis(df, dataset_id)[:8]
+    quality = _local_quality(df)
+    return {
+        "dataset_id": dataset_id,
+        "status": "ready",
+        "overview": {"row_count": quality["row_count"], "column_count": quality["column_count"], "column_groups": {"numeric": schema.get("numeric_columns", []), "categorical": schema.get("categorical_columns", []), "datetime": schema.get("datetime_columns", [])}},
+        "kpi_cards": kpis,
+        "chart_specs": charts,
+        "data_quality_score": {"score": quality["score"], "grade": quality["grade"]},
+        "dashboard_spec": {"domain": {"detected": "Local Analytics", "confidence": "medium"}, "default_dashboard": {"kpis": kpis, "charts": charts, "slicers": _slicer_summaries_from_schema(schema), "insights": [], "recommendations": []}, "storyboard_blueprint": [{"title": "Dataset Overview", "source": "overview"}, {"title": "KPI Summary", "source": "kpis"}, {"title": "Dashboard Visuals", "source": "charts"}]},
+        "export_bundle": {"excel_sheets": ["Data", "Stats Summary", "KPIs", "AI Insights", "Recommendations", "Charts"], "exports": {"pptx": True, "pdf": True, "excel": True, "chart_images": True}},
+    }
+
+
+def _render_auto_header(dashboard: dict) -> None:
+    spec = dashboard.get("dashboard_spec", {})
+    domain = spec.get("domain", {}) or dashboard.get("domain_intelligence", {}).get("detection", {})
+    overview = dashboard.get("overview", {})
+    domain_name = html.escape(str(domain.get("detected") or domain.get("domain") or "Generic"))
+    html_block = (
+        '<div style="border:1px solid rgba(148,163,184,.28);border-radius:10px;padding:16px 18px;margin:8px 0 14px;background:var(--ui-surface);">'
+        '<div style="font-size:.76rem;font-weight:800;color:var(--primary-color);text-transform:uppercase;">Auto BI Dashboard</div>'
+        '<div style="font-size:1.45rem;font-weight:850;color:var(--text-color);">Generated dashboard from dataset structure and BI rules</div>'
+        f'<div style="font-size:.86rem;color:var(--text-muted);margin-top:4px;">{overview.get("row_count", 0):,} rows | {overview.get("column_count", 0):,} columns | Domain: {domain_name}</div>'
+        '</div>'
+    )
+    st.markdown(html_block, unsafe_allow_html=True)
+
+
+def _render_auto_kpis(cards: list[dict]) -> None:
+    if not cards:
+        st.info("No KPI cards are available for this dataset yet.")
+        return
+    for offset in range(0, min(len(cards), 8), 4):
+        cols = st.columns(4)
+        for col, card in zip(cols, cards[offset : offset + 4]):
+            col.metric(str(card.get("label", "KPI")), _display_value(card))
+            context = card.get("reason") or card.get("business_context") or card.get("description")
+            if context:
+                col.caption(str(context)[:140])
+
+
+def _render_quality_and_filters(dashboard: dict, schema: dict, dataset_id: str) -> dict:
+    quality = dashboard.get("data_quality_score", {}) or {}
+    with st.container(border=True):
+        st.markdown("#### Data Quality")
+        qcols = st.columns(3)
+        qcols[0].metric("Score", quality.get("score", "-"))
+        qcols[1].metric("Grade", quality.get("grade", "-"))
+        qcols[2].metric("Charts", len(dashboard.get("chart_specs", [])))
+    with st.container(border=True):
+        st.markdown("#### Filters")
+        filters = _dashboard_studio_slicer_payload(schema, dataset_id)
+        suggested = (dashboard.get("dashboard_spec", {}).get("default_dashboard", {}) or {}).get("slicers") or _slicer_summaries_from_schema(schema)
+        if suggested:
+            st.caption("Auto-suggested slicers: " + ", ".join(str(item.get("label", item.get("field", ""))) for item in suggested[:5]))
+        return filters
+
+
+def _render_auto_charts(charts: list[dict], *, compact: bool = False) -> None:
+    if not charts:
+        st.info("No chart-ready visuals were generated for this dataset.")
+        return
+    for offset in range(0, min(len(charts), 6), 2):
+        cols = st.columns(2)
+        for col, chart in zip(cols, charts[offset : offset + 2]):
+            with col.container(border=True):
+                st.markdown(f"**{chart.get('title', 'Dashboard Visual')}**")
+                metadata = chart.get("metadata", {})
+                if metadata.get("short_ai_insight") or metadata.get("subtitle"):
+                    st.caption(metadata.get("short_ai_insight") or metadata.get("subtitle"))
+                plotly_spec = chart.get("plotly", {})
+                fig = go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {}))
+                fig.update_layout(height=280 if compact else 340, margin={"l": 36, "r": 16, "t": 48, "b": 56})
+                st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_auto_insights(ai_payload: dict | None, dashboard: dict) -> None:
+    cards = (ai_payload or {}).get("cards") or (dashboard.get("dashboard_spec", {}).get("default_dashboard", {}) or {}).get("insights", [])
+    if not cards:
+        st.info("AI insight cards will appear here when backend insights are available.")
+        return
+    for card in cards[:4]:
+        with st.container(border=True):
+            st.markdown(f"**{card.get('title', card.get('type', 'Insight'))}**")
+            st.write(card.get("business_meaning") or card.get("insight") or card.get("supporting_evidence") or "Validated insight generated from dataset evidence.")
+            if card.get("executive_recommendation"):
+                st.caption("Recommendation: " + str(card.get("executive_recommendation")))
+
+
+def _render_customize_dashboard(client: BackendClient, dataset_id: str, schema: dict, dashboard: dict, local_df: pd.DataFrame | None, ai_payload: dict | None, storyboard: dict | None) -> None:
+    with st.expander("Customize Dashboard", expanded=False):
+        tabs = st.tabs(["KPIs", "Charts", "Slicers", "Insights", "Storyboard", "Export"])
+        dimensions = _field_names(schema.get("dimensions", []))
+        measures = _field_names(schema.get("measures", []))
+        with tabs[0]:
+            st.caption("Auto mode chooses averages for age/hour/duration/score, sums for financial measures, and counts for IDs/categories.")
+            _render_auto_kpis(dashboard.get("kpi_cards", []))
+            if measures:
+                c1, c2 = st.columns(2)
+                c1.selectbox("KPI Metric", measures, key=f"custom_kpi_metric_{dataset_id}")
+                c2.selectbox("Aggregation", ["Auto", "Average", "Sum", "Median", "Min", "Max", "Count"], key=f"custom_kpi_agg_{dataset_id}")
+        with tabs[1]:
+            st.caption("Recommended visuals are generated first; manual chart settings are optional.")
+            _render_auto_charts(dashboard.get("chart_specs", [])[:4], compact=True)
+            if dimensions:
+                c1, c2, c3 = st.columns(3)
+                dimension = c1.selectbox("Dimension", dimensions, key=f"custom_chart_dim_{dataset_id}")
+                measure = c2.selectbox("Measure", ["Count"] + measures, key=f"custom_chart_measure_{dataset_id}")
+                aggregation = c3.selectbox("Aggregation", ["auto", "average", "sum", "median", "min", "max", "count"], key=f"custom_chart_agg_{dataset_id}")
+                chart_type = st.selectbox("Chart Type", ["bar", "horizontal_bar", "line", "pie", "table"], key=f"custom_chart_type_{dataset_id}")
+                if st.button("Preview Custom Chart", key=f"preview_custom_chart_{dataset_id}"):
+                    spec = {"chart_type": chart_type, "dimension": dimension, "measure": None if measure == "Count" else measure, "aggregation": aggregation, "sort": "descending", "data_labels": True, "filters": {}}
+                    visual = _render_local_visual(local_df, spec) if local_df is not None else client.render_visual(dataset_id, spec)
+                    _render_auto_charts([visual.get("chart", {})])
+        with tabs[2]:
+            suggested = (dashboard.get("dashboard_spec", {}).get("default_dashboard", {}) or {}).get("slicers") or _slicer_summaries_from_schema(schema)
+            st.dataframe(pd.DataFrame(suggested), use_container_width=True, hide_index=True)
+        with tabs[3]:
+            _render_auto_insights(ai_payload, dashboard)
+        with tabs[4]:
+            blueprint = dashboard.get("dashboard_spec", {}).get("storyboard_blueprint", [])
+            if storyboard and storyboard.get("sections"):
+                st.write(f"Storyboard sections: {len(storyboard.get('sections', []))}")
+                st.dataframe(pd.DataFrame([{"Section": item.get("title"), "Order": item.get("order")} for item in storyboard.get("sections", [])]), use_container_width=True, hide_index=True)
+            elif blueprint:
+                st.dataframe(pd.DataFrame(blueprint), use_container_width=True, hide_index=True)
+            else:
+                st.info("Storyboard will be generated from overview, KPIs, insights, visuals, risks, and recommendations.")
+        with tabs[5]:
+            bundle = dashboard.get("export_bundle", {})
+            st.write("Exports use the same dashboard/storyboard bundle.")
+            exports = (bundle.get("exports") if isinstance(bundle, dict) else None) or {"pptx": True, "pdf": True, "excel": True}
+            rows = [{"format": fmt.upper(), "enabled": bool(enabled)} for fmt, enabled in exports.items()]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
 def render_visual_builder(client: BackendClient) -> None:
     st.header("Dashboard Studio")
-    st.caption("Build Power BI/Tableau-style visuals using semantic field roles, safer defaults, and business-friendly settings.")
+    st.caption("Auto BI builds the dashboard first. Customize only when you need to tune a KPI, chart, slicer, insight, storyboard, or export.")
+    _dashboard_studio_css()
     dataset_id = select_dataset(client)
     if not dataset_id:
         return
 
-    local_visual_df = None
+    local_df = None
+    ai_payload = None
+    storyboard = None
     if is_local_dataset_id(dataset_id):
-        local_visual_df = _local_active_dataframe(dataset_id)
-        if local_visual_df is None:
+        local_df = _local_active_dataframe(dataset_id)
+        if local_df is None:
             st.info("Upload a dataset first from Dataset Preview.")
             return
-        schema = _build_local_visual_schema(local_visual_df)
+        schema = _build_local_visual_schema(local_df)
+        dashboard = _build_local_auto_dashboard(local_df, dataset_id, schema)
     else:
         try:
             schema = client.get_visual_builder_schema(dataset_id)
+            dashboard = client.get_dashboard(dataset_id)
+            ai_payload = client.get_ai_business_insights(dataset_id)
+            storyboard = client.get_executive_storyboard(dataset_id)
         except requests.RequestException:
             _warn_backend_unavailable("Dashboard Studio")
             return
-    dimensions = [field["name"] for field in schema.get("dimensions", [])]
-    measures = [field["name"] for field in schema.get("measures", [])]
-    semantic_fields = {field["name"]: field for field in schema.get("semantic_layer", [])}
-    defaults = schema.get("suggested_defaults", {})
-    storyboard_key = f"dashboard_studio_storyboard_{dataset_id}"
-    selected_spec_key = f"dashboard_studio_spec_{dataset_id}"
-    builder_mode_key = f"dashboard_studio_builder_mode_{dataset_id}"
-    st.session_state.setdefault(storyboard_key, [])
-    st.session_state.setdefault(builder_mode_key, "chart")
 
-    if not dimensions:
-        st.info("No business dimension fields are available for Dashboard Studio. Add category, region, date, product, or segment fields to build visuals.")
-        return
-
-    # Active toolbar with builder mode switching
-    toolbar = st.columns(6)
-    if toolbar[0].button("Add KPI", use_container_width=True, type="primary" if st.session_state[builder_mode_key] == "kpi" else "secondary"):
-        st.session_state[builder_mode_key] = "kpi"
-        st.rerun()
-    if toolbar[1].button("Add Chart", use_container_width=True, type="primary" if st.session_state[builder_mode_key] == "chart" else "secondary"):
-        st.session_state[builder_mode_key] = "chart"
-        st.rerun()
-    if toolbar[2].button("Add Table", use_container_width=True, type="primary" if st.session_state[builder_mode_key] == "table" else "secondary"):
-        st.session_state[builder_mode_key] = "table"
-        st.rerun()
-    if toolbar[3].button("Add Slicer", use_container_width=True, type="primary" if st.session_state[builder_mode_key] == "slicer" else "secondary"):
-        st.session_state[builder_mode_key] = "slicer"
-        st.rerun()
-    if toolbar[4].button("Add Insight", use_container_width=True, type="primary" if st.session_state[builder_mode_key] == "insight" else "secondary"):
-        st.session_state[builder_mode_key] = "insight"
-        st.rerun()
-    has_spec = bool(st.session_state.get(selected_spec_key))
-    if toolbar[5].button("Storyboard", use_container_width=True, disabled=not has_spec):
-        spec_item = st.session_state[selected_spec_key]
-        result = add_storyboard_entry(st.session_state[storyboard_key], spec_item)
-        if result.get("added"):
-            st.success("Current visual added to storyboard for this session.")
-        else:
-            st.info("This visual already exists in the storyboard.")
-    if not has_spec:
-        st.caption("Create or select a visual before adding to Storyboard.")
-
-    recommended_visuals = schema.get("recommended_visuals", [])
-    if recommended_visuals:
-        st.subheader("Recommended Visuals")
-        for offset in range(0, min(len(recommended_visuals), 6), 3):
-            rec_cols = st.columns(3)
-            for local_idx, (col, recommendation) in enumerate(
-                zip(rec_cols, recommended_visuals[offset : offset + 3])
-            ):
-                idx = offset + local_idx
-                with col.container(border=True):
-                    st.markdown(f"**{recommendation.get('title', 'Recommended Visual')}**")
-                    st.caption(recommendation.get("business_meaning", ""))
-                    st.write(f"Chart: `{recommendation.get('suggested_chart_type', '')}`")
-                    fields_used = ", ".join(recommendation.get("fields_used", [])) or "Dataset records"
-                    st.write(f"Fields: {fields_used}")
-                    st.caption(recommendation.get("why_useful", ""))
-                    if recommendation.get("short_ai_insight"):
-                        st.info(recommendation["short_ai_insight"])
-                    action_cols = st.columns(2)
-                    if action_cols[0].button("Use this Visual", key=f"use_{recommendation.get('visual_id')}_{idx}", use_container_width=True):
-                        st.session_state[selected_spec_key] = recommendation.get("spec", {})
-                        st.session_state[builder_mode_key] = recommendation.get("spec", {}).get("chart_type", "chart") if recommendation.get("spec", {}).get("chart_type") != "kpi" else "chart"
-                        st.rerun()
-                    if action_cols[1].button("Storyboard", key=f"story_{recommendation.get('visual_id')}_{idx}", use_container_width=True):
-                        result = add_storyboard_entry(st.session_state[storyboard_key], recommendation)
-                        if result.get("added"):
-                            st.success("Added to storyboard for this session.")
-                        else:
-                            st.info("This visual already exists in the storyboard.")
-
-    # Builder panels based on active mode
-    builder_mode = st.session_state[builder_mode_key]
-    if builder_mode == "kpi":
-        with st.container(border=True):
-            st.subheader("KPI Builder")
-            st.caption("Configure a headline KPI metric for the dashboard.")
-            kpi_measure = st.selectbox("KPI Metric", ["Count"] + measures, key=f"kpi_measure_{dataset_id}")
-            kpi_label = st.text_input("KPI Label", value=kpi_measure if kpi_measure != "Count" else "Total Records", key=f"kpi_label_{dataset_id}")
-            if st.button("Create KPI", key=f"create_kpi_{dataset_id}", use_container_width=True, type="primary"):
-                kpi_spec = {
-                    "chart_type": "table",
-                    "dimension": dimensions[0] if dimensions else None,
-                    "measure": None if kpi_measure == "Count" else kpi_measure,
-                    "aggregation": "count" if kpi_measure == "Count" else "sum",
-                    "sort": "descending",
-                    "title": kpi_label,
-                    "data_labels": True,
-                    "filters": {},
-                }
-                st.session_state[selected_spec_key] = kpi_spec
-                st.rerun()
-
-    elif builder_mode == "table":
-        with st.container(border=True):
-            st.subheader("Table / Matrix Builder")
-            st.caption("Configure a tabular view of your data.")
-            table_dim = st.selectbox("Rows", dimensions, key=f"table_dim_{dataset_id}")
-            table_meas = st.selectbox("Values", ["Count"] + measures, key=f"table_meas_{dataset_id}")
-            table_agg = st.selectbox("Aggregation", ["sum", "mean", "count", "min", "max"], key=f"table_agg_{dataset_id}")
-            if st.button("Create Table", key=f"create_table_{dataset_id}", use_container_width=True, type="primary"):
-                table_spec = {
-                    "chart_type": "table",
-                    "dimension": table_dim,
-                    "measure": None if table_meas == "Count" else table_meas,
-                    "aggregation": table_agg,
-                    "sort": "descending",
-                    "title": f"{table_meas or 'Count'} by {table_dim}",
-                    "data_labels": True,
-                    "filters": {},
-                }
-                st.session_state[selected_spec_key] = table_spec
-                st.rerun()
-
-    elif builder_mode == "slicer":
-        with st.container(border=True):
-            st.subheader("Slicer Builder")
-            st.caption("Add interactive filters to the dashboard canvas.")
-            st.info("Slicers are configured in the Slicers panel below. Select fields to filter by.")
-            slicer_fields = list(schema.get("filters", {}).keys())
-            if slicer_fields:
-                chosen = st.multiselect("Available filter fields", slicer_fields, key=f"slicer_fields_{dataset_id}")
-                if chosen:
-                    st.success(f"Slicers active for: {', '.join(chosen)}")
-            else:
-                st.info("No filter-eligible fields detected in the current dataset.")
-
-    elif builder_mode == "insight":
-        with st.container(border=True):
-            st.subheader("Insight Card Builder")
-            st.caption("Add an AI-generated insight card to the canvas.")
-            if local_visual_df is not None:
-                st.info("AI insight cards require backend connection. Local chart and table builders are available.")
-                return
-            try:
-                insight_payload = client.get_insights(dataset_id)
-                insights = insight_payload.get("insights", [])
-                if insights:
-                    chosen_insight = st.selectbox("Select insight", [i.get("title", i.get("message", "")) for i in insights], key=f"insight_sel_{dataset_id}")
-                    if st.button("Add Insight to Canvas", key=f"add_insight_{dataset_id}", use_container_width=True, type="primary"):
-                        matched = next((i for i in insights if i.get("title", i.get("message", "")) == chosen_insight), insights[0])
-                        st.session_state[selected_spec_key] = {"insight": matched, "chart_type": "insight"}
-                        st.rerun()
-                else:
-                    st.info("No AI insights are available for the current dataset.")
-            except requests.RequestException:
-                st.info("Could not load insights for insight card builder.")
-
-    # Chart builder (always visible, active when builder_mode == "chart")
-    _dashboard_studio_css()
-
-    # Sidebar + Canvas layout: filters on the right, builder controls on the left.
-    # Presentation-only: we keep the returned `filters` payload identical.
-    left, right = st.columns([2.2, 1])
+    _render_auto_header(dashboard)
+    left, right = st.columns([2.7, 1])
     with right:
-        st.subheader("Filters")
-        filters = _dashboard_studio_slicer_payload(schema, dataset_id)
+        filters = _render_quality_and_filters(dashboard, schema, dataset_id)
+    if filters and local_df is None:
+        try:
+            dashboard = client.get_filtered_dashboard(dataset_id, filters)
+        except requests.RequestException:
+            _warn_backend_unavailable("Filtered Dashboard Studio")
 
-    canvas, settings = left.columns([1.6, 1])
-    selected_spec = st.session_state.get(selected_spec_key, {})
-    with settings:
-        st.subheader("Visual Settings")
-        selected_dimension_default = selected_spec.get("dimension") or defaults.get("dimension")
-        dimension = st.selectbox(
-            "Dimension / Axis",
-            dimensions,
-            index=dimensions.index(selected_dimension_default) if selected_dimension_default in dimensions else 0,
-        )
-        measure_options = ["Count"] + measures
-        default_measure = selected_spec.get("measure") or (defaults.get("measure") if defaults.get("measure") in measures else "Count")
-        default_measure = default_measure if default_measure in measure_options else "Count"
-        measure_label = st.selectbox(
-            "Measure / Value",
-            measure_options,
-            index=measure_options.index(default_measure) if default_measure in measure_options else 0,
-        )
-        chart_options = ["bar", "horizontal_bar", "line", "pie", "table"]
-        default_chart = selected_spec.get("chart_type") or (defaults.get("chart_type") if defaults.get("chart_type") in chart_options else "bar")
-        if default_chart not in chart_options:
-            default_chart = "bar"
-        chart_type = st.selectbox("Chart Type", chart_options, index=chart_options.index(default_chart))
-        aggregation_options = ["sum", "mean", "count", "min", "max"]
-        default_aggregation = selected_spec.get("aggregation") or defaults.get("aggregation", "sum")
-        aggregation = st.selectbox(
-            "Aggregation",
-            aggregation_options,
-            index=aggregation_options.index(default_aggregation) if default_aggregation in aggregation_options else 0,
-        )
-        sort_options = ["descending", "ascending", "none"]
-        default_sort = selected_spec.get("sort", "descending")
-        sort = st.selectbox("Sort", sort_options, index=sort_options.index(default_sort) if default_sort in sort_options else 0)
-        legend = st.selectbox("Legend", ["None"] + dimensions, index=0)
-        tooltip = st.selectbox("Tooltip", ["Auto"] + dimensions + measures, index=0)
-        number_formats = ["Auto", "Whole Number", "Decimal Number", "Currency", "Percentage"]
-        default_number_format = selected_spec.get("number_format", "Auto")
-        number_format = st.selectbox(
-            "Number Format",
-            number_formats,
-            index=number_formats.index(default_number_format) if default_number_format in number_formats else 0,
-        )
-        title = st.text_input("Title", value=selected_spec.get("title") or "")
-        data_labels = st.checkbox("Data Labels", value=bool(selected_spec.get("data_labels", True)))
-        selected_dimension_meta = semantic_fields.get(dimension, {})
-        selected_measure_meta = semantic_fields.get(measure_label, {}) if measure_label != "Count" else {}
-        if selected_dimension_meta.get("helper_message"):
-            st.warning(selected_dimension_meta["helper_message"])
-        if selected_measure_meta.get("helper_message"):
-            st.warning(selected_measure_meta["helper_message"])
-        st.caption(
-            f"Axis role: {selected_dimension_meta.get('semantic_role', 'unknown')} | "
-            f"Measure role: {selected_measure_meta.get('semantic_role', 'count') if measure_label != 'Count' else 'count'}"
-        )
+    with left:
+        st.subheader("Executive KPI Cards")
+        _render_auto_kpis(dashboard.get("kpi_cards", []))
+        st.subheader("Dashboard Canvas")
+        _render_auto_charts(dashboard.get("chart_specs", []))
+        st.subheader("Insight Cards")
+        _render_auto_insights(ai_payload, dashboard)
 
-    spec = {
-        "chart_type": chart_type,
-        "dimension": dimension,
-        "measure": None if measure_label == "Count" else measure_label,
-        "aggregation": aggregation,
-        "sort": sort,
-        "legend": None if legend == "None" else legend,
-        "tooltip": None if tooltip == "Auto" else tooltip,
-        "number_format": number_format,
-        "title": title.strip() or None,
-        "data_labels": data_labels,
-        "filters": filters,
-    }
-
-    if builder_mode == "chart" or spec.get("chart_type") not in {"insight"}:
-        if local_visual_df is not None:
-            visual = _render_local_visual(local_visual_df, spec)
-        else:
-            try:
-                visual = client.render_visual(dataset_id, spec)
-            except requests.RequestException:
-                _warn_backend_unavailable("Dashboard visual rendering")
-                return
-        for warning in visual.get("semantic_warnings", []):
-            st.warning(warning)
-
-        with canvas:
-            st.subheader("Dashboard Canvas")
-            chart = visual.get("chart", {})
-            plotly_spec = chart.get("plotly", {})
-            fig = go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {}))
-
-            filtered_rows = chart.get("metadata", {}).get("filtered_rows")
-            short_insight = chart.get("metadata", {}).get(
-                "short_ai_insight",
-                "Use this visual to compare business performance across the selected fields.",
-            )
-
-            st.markdown('<div class="ds-card">', unsafe_allow_html=True)
-            st.markdown(
-                """
-                <div class="ds-card-header">
-                    <div class="ds-card-title">{title}</div>
-                    <div class="ds-card-subtitle">{subtitle}</div>
-                </div>
-                <div class="ds-card-body">
-                """.format(
-                    title=html.escape(str(chart.get("title", "Dashboard Visual"))),
-                    subtitle=html.escape(str(short_insight)),
-                ),
-                unsafe_allow_html=True,
-            )
-
-            if filtered_rows == 0:
-                st.info("No data matches the selected filters for this visual.")
-            else:
-                st.plotly_chart(fig, use_container_width=True)
-
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            st.markdown('<div class="ds-card-footer">', unsafe_allow_html=True)
-
-            # Footer row: actions + insights.
-            card_cols = st.columns([1, 1, 1.2])
-            if card_cols[0].button("Storyboard", key="add_current_visual_storyboard", use_container_width=True):
-                result = add_storyboard_entry(
-                    st.session_state[storyboard_key],
-                    {
-                        "chart_id": chart.get("chart_id"),
-                        "title": chart.get("title", "Dashboard Visual"),
-                        "business_meaning": chart.get("metadata", {}).get("short_ai_insight", ""),
-                        "suggested_chart_type": visual.get("applied_spec", {}).get("chart_type", ""),
-                        "fields_used": chart.get("fields", []),
-                        "spec": visual.get("applied_spec", {}),
-                        "short_ai_insight": chart.get("metadata", {}).get("short_ai_insight", ""),
-                    },
-                )
-                if result.get("added"):
-                    st.success("Current visual added to storyboard for this session.")
-                else:
-                    st.info("This visual already exists in the storyboard.")
-
-            if card_cols[1].button("Add to report", key="add_current_visual_report", use_container_width=True):
-                if not chart.get("chart_id"):
-                    st.warning("This visual is missing a chart ID and cannot be added to Reports.")
-                else:
-                    try:
-                        registration = client.register_visual(dataset_id, chart)
-                        if registration.get("registered"):
-                            st.success("Visual added to Reports.")
-                        else:
-                            st.info("Visual already exists in Reports and was reused.")
-                    except requests.RequestException:
-                        _warn_backend_unavailable("Adding visual to Reports")
-
-            card_cols[2].caption("Use Reports to export selected visuals as PDF, PPTX, PNG, JSON, CSV, or Excel.")
-            st.caption(
-                "Known issue: legend, tooltip, and number format options may not be fully applied by the renderer, "
-                "so exports can differ from the Dashboard Studio preview."
-            )
-
-            # Confidence: we do not compute/regenerate KPI confidence. We show a safe placeholder from metadata when present.
-            confidence_val = chart.get("metadata", {}).get("confidence")
-            if confidence_val is None:
-                confidence_val = "—"
-            st.markdown(f'<div class="ds-confidence"><b>Confidence:</b> {html.escape(str(confidence_val))}</div>', unsafe_allow_html=True)
-
-            st.markdown("</div></div>", unsafe_allow_html=True)
-
-            storyboard = st.session_state.get(storyboard_key, [])
-            if storyboard:
-                with st.expander(f"Storyboard ({len(storyboard)} visuals)", expanded=False):
-                    for item in storyboard:
-                        st.write(f"**{item.get('title')}**")
-                        st.caption(item.get("business_meaning") or item.get("short_ai_insight", ""))
-            with st.expander("Semantic Layer"):
-                semantic_rows = [
-                    {
-                        "Column": field.get("name"),
-                        "Role": field.get("semantic_role"),
-                        "Type": field.get("semantic_type"),
-                        "Unique Values": field.get("unique_count"),
-                        "Priority": field.get("business_priority"),
-                    }
-                    for field in schema.get("semantic_layer", [])
-                ]
-                st.dataframe(pd.DataFrame(semantic_rows), use_container_width=True, hide_index=True)
-
-        with st.expander("Suggestions"):
-            st.dataframe(pd.DataFrame(visual.get("suggestions", [])), use_container_width=True)
+    _render_customize_dashboard(client, dataset_id, schema, dashboard, local_df, ai_payload, storyboard)

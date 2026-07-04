@@ -10,7 +10,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import Image, KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from backend.services.export_render_service import chart_to_png_bytes, filter_charts
+from backend.services.export_render_service import build_export_bundle
 
 
 def _hex_color(value: str, fallback: colors.Color) -> colors.Color:
@@ -93,7 +93,8 @@ def build_executive_pdf(
     ]
 
     overview = report.get("overview", {})
-    rendered_charts = [(chart, png) for chart in filter_charts(report, chart_ids) if (png := chart_to_png_bytes(chart, width=920, height=480))]
+    export_bundle = build_export_bundle(report, chart_ids, width=920, height=480)
+    rendered_charts = export_bundle.charts
     overview_table = _wrapped_table(
         [
             ["Rows", "Columns", "Charts", "Generated"],
@@ -148,7 +149,7 @@ def build_executive_pdf(
         kpi_rows.append(
             [
                 card.get("label", ""),
-                card.get("value", ""),
+                card.get("formatted_value", card.get("value", "")),
                 card.get("delta_percentage", ""),
                 card.get("reason", card.get("description", "")),
             ]
@@ -196,7 +197,9 @@ def build_executive_pdf(
     if rendered_charts:
         story.append(PageBreak())
         story.append(_paragraph("Dashboard Visuals", styles["Section"]))
-        for chart, png in rendered_charts:
+        for export_chart in rendered_charts:
+            chart = export_chart.chart
+            png = export_chart.png
             story.append(_paragraph(chart.get("title", "Chart"), styles["Heading3"]))
             image = Image(io.BytesIO(png), width=6.55 * inch, height=3.45 * inch)
             story.extend([image, Spacer(1, 0.14 * inch)])
@@ -272,7 +275,7 @@ def build_storyboard_pdf(
     if kpis:
         rows = [["KPI", "Value", "Context"]]
         for card in kpis[:8]:
-            rows.append([card.get("label", ""), card.get("value", ""), card.get("business_context", card.get("description", ""))])
+            rows.append([card.get("label", ""), card.get("formatted_value", card.get("value", "")), card.get("business_context", card.get("description", ""))])
         story.append(_wrapped_table(rows, [1.6 * inch, 1.1 * inch, 3.7 * inch], accent, styles["StoryBody"]))
     else:
         story.append(_paragraph("No KPI cards are available for this dataset.", styles["StoryBody"]))
@@ -292,14 +295,20 @@ def build_storyboard_pdf(
         story.append(_paragraph("No AI Business Insight cards are available.", styles["StoryBody"]))
 
     charts = _storyboard_section(storyboard, "executive_charts").get("charts", [])
+    if not charts:
+        charts = report.get("chart_specs", [])
     if chart_ids:
         selected = set(chart_ids)
         charts = [chart for chart in charts if chart.get("chart_id") in selected]
-    rendered_charts = [(chart, png) for chart in charts if (png := chart_to_png_bytes(chart, width=920, height=480))]
+    story_report = {**report, "chart_specs": charts}
+    export_bundle = build_export_bundle(story_report, None, width=920, height=480)
+    rendered_charts = export_bundle.charts
     story.append(PageBreak())
     story.append(_paragraph("4. Executive Charts", styles["StorySection"]))
     if rendered_charts:
-        for chart, png in rendered_charts:
+        for export_chart in rendered_charts:
+            chart = export_chart.chart
+            png = export_chart.png
             story.append(_paragraph(chart.get("title", "Chart"), styles["Heading3"]))
             story.append(Image(io.BytesIO(png), width=6.45 * inch, height=3.35 * inch))
             story.append(Spacer(1, 0.12 * inch))

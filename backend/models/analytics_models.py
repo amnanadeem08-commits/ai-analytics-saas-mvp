@@ -85,10 +85,13 @@ class DashboardResponse(BaseModel):
     chart_specs: list[ChartSpec]
     business_metrics: dict[str, Any]
     domain_intelligence: dict[str, Any] = {}
+    domain_context: dict[str, Any] = {}
     regional_analytics: dict[str, Any] = {}
     analysis_guardrails: dict[str, Any] = {}
     data_quality_score: dict[str, Any] = {}
     suggested_questions: list[str] = []
+    dashboard_spec: dict[str, Any] = {}
+    export_bundle: dict[str, Any] = {}
     layout: DashboardLayout
     column_types: ColumnTypes
     top_categories: dict[str, list[dict[str, Any]]]

@@ -7,6 +7,7 @@ from typing import Any
 
 from backend.core.branding_manager import branding_manager
 from backend.core.config import settings
+from backend.models.domain_context_models import DomainContext
 from backend.processing.analytics_engine import build_dashboard_stats
 from backend.processing.data_profiler import profile_dataframe
 from backend.processing.overview_service import build_dataset_overview
@@ -15,7 +16,8 @@ from backend.services.analysis_guardrail_service import build_analysis_guardrail
 from backend.services.chart_service import generate_chart_specs
 from backend.services.chart_catalog_service import load_custom_chart_specs
 from backend.services.dataset_service import get_dataset_metadata, load_dataset_dataframe
-from backend.services.domain_intelligence_service import build_domain_intelligence
+from backend.services.domain_intelligence_service import build_domain_context
+from backend.services.dashboard_spec_service import build_dashboard_spec
 from backend.services.filter_service import apply_filters
 from backend.services.geospatial_service import generate_geo_chart_specs, regional_analytics
 from backend.services.kpi_service import compute_business_metrics, compute_kpi_cards
@@ -32,9 +34,10 @@ def _build_dashboard_view_uncached(dataset_id: str, filters: dict[str, Any] | No
     profile = profile_dataframe(df)
     overview = build_dataset_overview(df, preview_rows=5, profile=profile)
     kpi_cards = compute_kpi_cards(df)
-    domain_intelligence = build_domain_intelligence(df)
+    domain_context: DomainContext = build_domain_context(df)
+    domain_intelligence = domain_context.to_dict()
     business_metrics = compute_business_metrics(df)
-    for index, card in enumerate(domain_intelligence.get("domain_kpis", [])):
+    for index, card in enumerate(domain_context.domain_specific_kpis):
         kpi_cards.insert(
             min(index, len(kpi_cards)),
             {
@@ -108,7 +111,7 @@ def _build_dashboard_view_uncached(dataset_id: str, filters: dict[str, Any] | No
         },
     ]
 
-    return {
+    result = {
         "dataset_id": dataset_id,
         "status": "ready",
         "theme": theme.to_dict(),
@@ -127,17 +130,28 @@ def _build_dashboard_view_uncached(dataset_id: str, filters: dict[str, Any] | No
         "chart_specs": chart_specs,
         "business_metrics": business_metrics,
         "domain_intelligence": domain_intelligence,
+        "domain_context": domain_context.to_dict().get("domain_context", {}),
         "regional_analytics": regional,
         "analysis_guardrails": build_analysis_guardrails(df),
         "data_quality_score": profile.get("data_quality_score", {}),
         "suggested_questions": build_suggested_questions(
             business_metrics=business_metrics,
-            domain_intelligence=domain_intelligence,
+            domain_context=domain_context,
             profile=profile,
         ),
         "layout": {"sections": sections},
         **legacy_stats,
     }
+    result["dashboard_spec"] = build_dashboard_spec(dataset_id, df, result)
+    result["export_bundle"] = {
+        "dataset_id": dataset_id,
+        "dashboard_spec": result["dashboard_spec"],
+        "kpi_cards": result["kpi_cards"],
+        "chart_specs": result["chart_specs"],
+        "excel_sheets": ["Data", "Stats Summary", "KPIs", "AI Insights", "Recommendations", "Charts"],
+        "exports": {"pptx": True, "pdf": True, "excel": True, "chart_images": True},
+    }
+    return result
 
 logger = logging.getLogger(__name__)
 

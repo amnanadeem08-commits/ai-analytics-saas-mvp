@@ -35,4 +35,6 @@ def render_insight(insight: dict) -> None:
     # Raw JSON/metadata hidden behind collapsed expander — not visible by default
     if insight.get("metadata"):
         with st.expander("View technical evidence", expanded=False):
-            st.json(insight["metadata"])
+            metadata = insight.get("metadata", {})
+            rows = [{"field": str(key).replace("_", " "), "value": value} for key, value in metadata.items()]
+            st.dataframe(rows, use_container_width=True, hide_index=True)

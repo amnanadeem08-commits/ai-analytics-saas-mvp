@@ -178,8 +178,6 @@ def render_regional_analytics(client: BackendClient, dataset_id: str | None = No
         with st.expander(item.get("title", "Regional Insight"), expanded=True):
             st.write(item.get("insight", ""))
             st.write(f"**Recommendation:** {item.get('recommendation', '')}")
-    with st.expander("Debug regional data", expanded=False):
-        st.json(regional)
 def render_geographic_insights(client: BackendClient, dataset_id: str | None = None) -> None:
     if dataset_id is None:
         dataset_id = select_dataset(client, key="geographic_insights_dataset")

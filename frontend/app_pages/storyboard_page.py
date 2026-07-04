@@ -259,8 +259,11 @@ def render_storyboard_builder(client: BackendClient) -> None:
     current = visuals[st.session_state[slide_key]]
     st.markdown(f'<div class="story-counter">{st.session_state[slide_key] + 1} of {slide_count}</div>', unsafe_allow_html=True)
 
-    with st.container():
-        st.markdown(f'<div class="story-slide"><div class="story-header">:material/slideshow: Slide {st.session_state[slide_key] + 1}/{slide_count} &nbsp; | &nbsp; {html.escape(str(current.get("title", "Storyboard Slide")))}</div><div class="story-grid">', unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown(
+            f'### Slide {st.session_state[slide_key] + 1}/{slide_count}: {html.escape(str(current.get("title", "Storyboard Slide")))}',
+            unsafe_allow_html=False,
+        )
         left_panel, right_panel = st.columns([0.32, 0.68])
         left_panel.markdown('<div class="story-section-title">KPI Cards</div>', unsafe_allow_html=True)
 
@@ -282,14 +285,14 @@ def render_storyboard_builder(client: BackendClient) -> None:
                 chart = visual.get("chart", {})
                 plotly_spec = chart.get("plotly", {})
                 with right_panel:
-                    with right_panel:
-                        st.plotly_chart(go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {})), use_container_width=True)
+                    st.plotly_chart(go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {})), use_container_width=True)
             else:
                 try:
                     visual = client.render_visual(dataset_id, spec)
                     chart = visual.get("chart", {})
                     plotly_spec = chart.get("plotly", {})
-                    st.plotly_chart(go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {})), use_container_width=True)
+                    with right_panel:
+                        st.plotly_chart(go.Figure(data=plotly_spec.get("data", []), layout=plotly_spec.get("layout", {})), use_container_width=True)
                 except requests.RequestException:
                     _warn_backend_unavailable("Storyboard visual rendering")
         elif layout_mode == "Table only":
@@ -305,7 +308,6 @@ def render_storyboard_builder(client: BackendClient) -> None:
                 f'<div class="story-recommendation-box"><b>💡 Recommendation</b><br>{html.escape(str(recommendation))}</div>',
                 unsafe_allow_html=True,
             )
-        st.markdown('</div></div>', unsafe_allow_html=True)
 
     storyboard_chart_ids = [item.get("chart_id") for item in visuals if item.get("chart_id") and not str(item.get("chart_id")).startswith("kpi_")]
     storyboard_kpi_ids = [item.get("kpi_id") for item in visuals if item.get("kpi_id")]
@@ -358,8 +360,11 @@ def _render_local_storyboard_builder(dataset_id: str, df: pd.DataFrame) -> None:
 
     for idx, slide in enumerate(updated_items):
         slide_id = slide.get("slide_id", f"slide_{idx+1}")
-        with st.container():
-            st.markdown(f'<div class="story-slide"><div class="story-header">:material/slideshow: Slide {idx + 1}/{len(updated_items)} &nbsp; | &nbsp; {html.escape(str(slide.get("title", "Storyboard Slide")))}</div><div class="story-grid">', unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown(
+                f'### Slide {idx + 1}/{len(updated_items)}: {html.escape(str(slide.get("title", "Storyboard Slide")))}',
+                unsafe_allow_html=False,
+            )
             header_cols = st.columns([3.2, 1.2, 1.2, 1.2])
             new_title = header_cols[0].text_input(
                 "Slide title",
@@ -389,8 +394,6 @@ def _render_local_storyboard_builder(dataset_id: str, df: pd.DataFrame) -> None:
             if slide.get("kpis"):
                 for kpi in slide["kpis"]:
                     left_panel.markdown(_storyboard_kpi_card_html(kpi.get("label", "KPI"), kpi.get("value", "-")), unsafe_allow_html=True)
-            else:
-                left_panel.markdown('<div class="story-kpi-card"><div class="story-kpi-label">No KPIs on this slide</div></div>', unsafe_allow_html=True)
 
             first_chart = next((chart for chart in slide.get("charts", []) if chart.get("plotly", {}).get("data")), None)
             if first_chart:
@@ -416,7 +419,6 @@ def _render_local_storyboard_builder(dataset_id: str, df: pd.DataFrame) -> None:
                 '<div class="story-recommendation-box"><b>💡 Recommendation</b><br>Use this slide to guide the next executive discussion.</div>',
                 unsafe_allow_html=True,
             )
-            st.markdown('</div></div>', unsafe_allow_html=True)
 
     if remove_index is not None:
         updated_items.pop(remove_index)
@@ -466,179 +468,65 @@ def _render_local_storyboard_exports(items: list[dict], dataset_id: str) -> None
         mime="application/json",
         use_container_width=True,
     )
+def _slide_recommendation(recommendations: list[dict], index: int) -> dict:
+    if recommendations:
+        return recommendations[index % len(recommendations)]
+    return {
+        "recommendation": "Review this visual with the supporting KPI before making a decision.",
+        "reason": "The slide was generated from available dataset evidence and a valid chart.",
+        "expected_impact": "Keeps the executive discussion tied to visible data.",
+        "confidence": "Medium",
+    }
+
+
+def _supporting_kpi(kpis: list[dict], index: int) -> dict:
+    if kpis:
+        return kpis[index % len(kpis)]
+    return {"label": "Records Analyzed", "value": "N/A", "business_context": "Dataset evidence was not sufficient to calculate KPI cards."}
+
+
+def _chart_insight(chart: dict, kpi: dict, summary: dict) -> str:
+    title = str(chart.get("title") or "Storyboard visual")
+    kind = str(chart.get("kind") or "visual").lower()
+    kpi_label = str(kpi.get("label") or kpi.get("title") or "supporting KPI")
+    row_count = int(summary.get("row_count", 0) or 0)
+    return f"{title} gives leadership a {kind} view backed by {kpi_label} across {row_count:,} uploaded records."
+
+
 def build_default_storyboard(df: pd.DataFrame, dataset_id: str, theme: str | None, settings: dict | None) -> list[dict]:
     summary = local_summary(df)
-    numeric, categorical, datetime_cols = local_column_groups(df)
-    completeness = (1 - (summary.get("total_missing_values", 0) / max(summary.get("row_count", 1) * summary.get("column_count", 1), 1))) * 100
-    duplicate_rate = (summary.get("duplicate_rows", 0) / max(summary.get("row_count", 1), 1)) * 100
-    quality_score_value, quality_grade, quality_reasons = quality_score(summary)
-    charts = _local_storyboard_chart_specs(df, dataset_id)
+    charts = [chart for chart in _local_storyboard_chart_specs(df, dataset_id) if chart.get("plotly", {}).get("data")]
+    if not charts:
+        return []
+
     kpis = _local_kpi_cards(df)[:6]
-    anomalies = _local_anomaly_rows(df)
-    anomalies.extend(_zscore_outlier_notes(df, numeric))
-    anomalies = list(dict.fromkeys(anomalies))[:8]
     recommendations = _storyboard_recommendations(df)
-    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    dataset_name = _dataset_display_name(dataset_id)
     theme_snapshot = _storyboard_theme_snapshot(theme)
 
-    summary_bullets = [
-        f"{summary.get('row_count', 0):,} records across {summary.get('column_count', 0):,} columns were analyzed.",
-        f"Data completeness is {completeness:.1f}% with duplicate rate at {duplicate_rate:.2f}%.",
-        f"Detected {len(numeric):,} numeric fields, {len(categorical):,} categorical fields, and {len(datetime_cols):,} date-like fields.",
-    ]
-    risk_line = anomalies[0] if anomalies else "No major statistical anomalies detected in the selected dataset."
-    summary_bullets.append(f"Key risk signal: {risk_line}")
-    if datetime_cols and numeric:
-        summary_bullets.append("Opportunity: use time-trend monitoring to detect directional shifts in core metrics.")
-    elif categorical and numeric:
-        summary_bullets.append("Opportunity: compare top segments to identify associated drivers of high and low performance.")
-    summary_bullets.append("Recommended action: review quality and anomaly slides before publishing board decisions.")
-
-    visual_slides = [
-        {
-            "slide_id": f"slide_data_visual_{dataset_id}",
-            "title": "Data Visual Analysis",
-            "section_type": "data_visual_analysis",
-            "content": {
-                "description": "Numeric distributions, category concentrations, and correlation/trend patterns from current dataset values.",
-            },
-            "charts": charts,
-            "kpis": [],
-            "insights": [
-                "Visuals are auto-selected from available field types and rendered only when valid chart inputs exist.",
-                "Correlation views indicate association strength and should not be interpreted as causal evidence.",
-            ],
-            "theme_snapshot": theme_snapshot,
-        }
-    ]
-
-    business_insights: list[str] = []
-    if categorical and numeric:
-        top_col = categorical[0]
-        top_counts = df[top_col].astype("string").fillna("Unknown").value_counts()
-        if not top_counts.empty:
-            business_insights.append(
-                f"Top segment in {top_col} is '{top_counts.index[0]}' with {int(top_counts.iloc[0]):,} records, indicating concentration.")
-    if datetime_cols and numeric:
-        business_insights.append("A date-like field and numeric KPI are available, which supports trend-based monitoring.")
-    if not business_insights:
-        business_insights.append("Segment and trend insights are limited by current field mix; add richer categorical or date fields if available.")
-    business_insights.append("What/Why/Action: identify the largest segment shifts, review likely associated factors, then prioritize one corrective action owner.")
-
-    recommendations_lines = [
-        f"{item['recommendation']} Reason: {item['reason']} Expected impact: {item['expected_impact']} Confidence: {item['confidence']}"
-        for item in recommendations
-    ]
-
-    storyboard_items: list[dict] = [
-        {
-            "slide_id": f"slide_cover_{dataset_id}",
-            "title": "Executive Board Cover",
-            "section_type": "cover",
-            "content": {
-                "report_title": st.session_state.get("branding", {}).get("report_title", "Executive Decision Intelligence Report"),
-                "dataset_name": dataset_name,
-                "rows": summary.get("row_count", 0),
-                "columns": summary.get("column_count", 0),
-                "generated_at": created_at,
-                "theme": theme_snapshot.get("theme"),
-                "description": "Auto-built executive storyboard generated from your selected dataset.",
-            },
-            "charts": [],
-            "kpis": [],
-            "insights": ["Board-ready package generated automatically from local dataframe evidence."],
-            "theme_snapshot": theme_snapshot,
-        },
-        {
-            "slide_id": f"slide_exec_summary_{dataset_id}",
-            "title": "Executive Summary",
-            "section_type": "executive_summary",
-            "content": {"description": "What happened, risks, opportunities, and recommended immediate action."},
-            "charts": [],
-            "kpis": [],
-            "insights": summary_bullets[:6],
-            "theme_snapshot": theme_snapshot,
-        },
-        {
-            "slide_id": f"slide_data_quality_{dataset_id}",
-            "title": "Data Quality Snapshot",
-            "section_type": "data_quality",
-            "content": {
-                "description": "Completeness, missingness, duplicate risk, and overall quality grade.",
-                "completeness_pct": round(completeness, 2),
-                "missing_values": int(summary.get("total_missing_values", 0)),
-                "duplicate_rate_pct": round(duplicate_rate, 3),
-                "quality_score": quality_score_value,
-                "quality_grade": quality_grade,
-            },
-            "charts": [],
-            "kpis": [],
-            "insights": quality_reasons,
-            "theme_snapshot": theme_snapshot,
-        },
-        {
-            "slide_id": f"slide_kpi_{dataset_id}",
-            "title": "KPI Overview",
-            "section_type": "kpi_overview",
-            "content": {"description": "Core operational KPIs auto-selected from available numeric and profile fields."},
-            "charts": [],
-            "kpis": kpis,
-            "insights": [
-                "KPI cards summarize dataset health and magnitude indicators for executive scan speed.",
-            ],
-            "theme_snapshot": theme_snapshot,
-        },
-        *visual_slides,
-        {
-            "slide_id": f"slide_business_visual_{dataset_id}",
-            "title": "Business Visual Analysis",
-            "section_type": "business_visual_analysis",
-            "content": {"description": "Top and bottom segments, trend signal, and risk-opportunity interpretation framework."},
-            "charts": charts[:3],
-            "kpis": [],
-            "insights": business_insights,
-            "theme_snapshot": theme_snapshot,
-        },
-        {
-            "slide_id": f"slide_anomalies_{dataset_id}",
-            "title": "Anomalies and Risks",
-            "section_type": "anomalies_risks",
-            "content": {"description": "IQR and z-score anomaly checks, missing-value risks, and dominance warnings."},
-            "charts": [],
-            "kpis": [],
-            "insights": anomalies or ["No major statistical anomalies detected in the selected dataset."],
-            "theme_snapshot": theme_snapshot,
-        },
-        {
-            "slide_id": f"slide_recommendations_{dataset_id}",
-            "title": "Recommendations",
-            "section_type": "recommendations",
-            "content": {"description": "Business recommendations with reason, expected impact, and confidence."},
-            "charts": [],
-            "kpis": [],
-            "insights": recommendations_lines,
-            "recommendations": recommendations,
-            "theme_snapshot": theme_snapshot,
-        },
-        {
-            "slide_id": f"slide_closing_{dataset_id}",
-            "title": "Closing and Next Actions",
-            "section_type": "closing",
-            "content": {
-                "description": "Prioritized next steps and optional data limitation note.",
-                "limitations": "Insights indicate associations from observed data and should be validated before high-impact commitments.",
-            },
-            "charts": [],
-            "kpis": [],
-            "insights": [
-                "Assign owners for quality remediation and anomaly monitoring.",
-                "Publish a KPI watchlist with thresholds and review cadence.",
-                "Use trend and segment visuals for next steering committee review.",
-            ],
-            "theme_snapshot": theme_snapshot,
-        },
-    ]
+    storyboard_items: list[dict] = []
+    for index, chart in enumerate(charts[:8], start=1):
+        kpi = _supporting_kpi(kpis, index - 1)
+        recommendation = _slide_recommendation(recommendations, index - 1)
+        insight = _chart_insight(chart, kpi, summary)
+        storyboard_items.append(
+            {
+                "slide_id": f"slide_visual_{dataset_id}_{index}",
+                "title": chart.get("title") or f"Storyboard Visual {index}",
+                "section_type": "auto_visual_storyboard",
+                "content": {
+                    "description": insight,
+                    "recommendation": recommendation.get("recommendation", ""),
+                    "recommendation_reason": recommendation.get("reason", ""),
+                    "expected_impact": recommendation.get("expected_impact", ""),
+                    "confidence": recommendation.get("confidence", "Medium"),
+                },
+                "charts": [chart],
+                "kpis": [kpi],
+                "insights": [insight],
+                "recommendations": [recommendation],
+                "theme_snapshot": theme_snapshot,
+            }
+        )
     return storyboard_items
 def _storyboard_recommendations(df: pd.DataFrame) -> list[dict]:
     numeric, categorical, datetime_cols = local_column_groups(df)

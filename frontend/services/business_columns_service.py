@@ -138,6 +138,108 @@ def _formula_requirements(df: pd.DataFrame, m: dict[str, str]) -> pd.Series:
     return df[req_col].astype("string")
 
 
+def _formula_tenure_band(df: pd.DataFrame, m: dict[str, str]) -> pd.Series:
+    tenure_col = _get_column_if_present(m, ("tenure", "tenure_months", "customer_tenure"))
+    if not tenure_col:
+        raise ValueError("Missing tenure column for tenure band recipe.")
+    tenure = _safe_numeric(df, tenure_col)
+    bins = [-float("inf"), 6, 12, 24, float("inf")]
+    labels = ["New", "Early", "Established", "Loyal"]
+    return pd.cut(tenure, bins=bins, labels=labels, include_lowest=True).astype("string")
+
+
+def _formula_revenue_band(df: pd.DataFrame, m: dict[str, str]) -> pd.Series:
+    revenue_col = _get_column_if_present(m, ("monthly_charges", "monthly_revenue", "revenue", "sales"))
+    if not revenue_col:
+        raise ValueError("Missing revenue-like column for revenue band recipe.")
+    values = _safe_numeric(df, revenue_col)
+    valid = values.dropna()
+    if valid.empty:
+        return pd.Series(pd.NA, index=df.index, dtype="string")
+    q1 = float(valid.quantile(0.33))
+    q2 = float(valid.quantile(0.66))
+    out = pd.Series(pd.NA, index=df.index, dtype="string")
+    out.loc[values.le(q1)] = "Low"
+    out.loc[values.gt(q1) & values.le(q2)] = "Medium"
+    out.loc[values.gt(q2)] = "High"
+    return out
+
+
+def _formula_loyalty_tier(df: pd.DataFrame, m: dict[str, str]) -> pd.Series:
+    tenure_col = _get_column_if_present(m, ("tenure", "tenure_months", "customer_tenure"))
+    if not tenure_col:
+        raise ValueError("Missing tenure column for loyalty tier recipe.")
+    tenure = _safe_numeric(df, tenure_col)
+    bins = [-float("inf"), 6, 12, 24, float("inf")]
+    labels = ["Bronze", "Silver", "Gold", "Platinum"]
+    return pd.cut(tenure, bins=bins, labels=labels, include_lowest=True).astype("string")
+
+
+def _formula_high_value_customer(df: pd.DataFrame, m: dict[str, str]) -> pd.Series:
+    revenue_col = _get_column_if_present(m, ("monthly_charges", "monthly_revenue", "revenue", "sales"))
+    if not revenue_col:
+        raise ValueError("Missing revenue-like column for high value recipe.")
+    values = _safe_numeric(df, revenue_col)
+    threshold = float(values.dropna().quantile(0.75)) if not values.dropna().empty else 0.0
+    out = pd.Series(pd.NA, index=df.index, dtype="string")
+    out.loc[values.ge(threshold)] = "Yes"
+    out.loc[values.lt(threshold)] = "No"
+    return out
+
+
+def _formula_contract_category(df: pd.DataFrame, m: dict[str, str]) -> pd.Series:
+    contract_col = _get_column_if_present(m, ("contract_type", "contract"))
+    if not contract_col:
+        raise ValueError("Missing contract column for contract category recipe.")
+    return df[contract_col].astype("string")
+
+
+def _formula_payment_risk(df: pd.DataFrame, m: dict[str, str]) -> pd.Series:
+    payment_col = _get_column_if_present(m, ("payment_method", "payment", "payment_type"))
+    if not payment_col:
+        raise ValueError("Missing payment method column for payment risk recipe.")
+    text = df[payment_col].astype("string").str.lower().fillna("")
+    out = pd.Series("Medium", index=df.index, dtype="string")
+    out.loc[text.str.contains("electronic|credit|debit|auto", regex=True)] = "High"
+    out.loc[text.str.contains("bank transfer|bank|wire", regex=True)] = "Low"
+    out.loc[text.str.contains("mailed|cash|check", regex=True)] = "Medium"
+    return out
+
+
+def _formula_churn_risk(df: pd.DataFrame, m: dict[str, str]) -> pd.Series:
+    churn_col = _get_column_if_present(m, ("churn", "churned", "is_churn"))
+    tenure_col = _get_column_if_present(m, ("tenure", "tenure_months", "customer_tenure"))
+    revenue_col = _get_column_if_present(m, ("monthly_charges", "monthly_revenue", "revenue"))
+    if not churn_col:
+        raise ValueError("Missing churn column for churn risk recipe.")
+
+    churn_text = df[churn_col].astype("string").str.lower().fillna("")
+    out = pd.Series("Medium", index=df.index, dtype="string")
+    out.loc[churn_text.str.contains("yes|true|1|churned|left", regex=True)] = "High"
+
+    if tenure_col:
+        tenure = _safe_numeric(df, tenure_col)
+        out.loc[tenure.le(6) & out.ne("High")] = "High"
+        out.loc[tenure.ge(24) & out.ne("High")] = "Low"
+
+    if revenue_col:
+        values = _safe_numeric(df, revenue_col)
+        threshold = float(values.dropna().quantile(0.75)) if not values.dropna().empty else 0.0
+        out.loc[values.ge(threshold) & out.eq("High")] = "Critical"
+
+    return out
+
+
+def _formula_customer_segment(df: pd.DataFrame, m: dict[str, str]) -> pd.Series:
+    tenure_col = _get_column_if_present(m, ("tenure", "tenure_months", "customer_tenure"))
+    revenue_col = _get_column_if_present(m, ("monthly_charges", "monthly_revenue", "revenue"))
+    if not tenure_col or not revenue_col:
+        raise ValueError("Missing tenure or revenue column for customer segment recipe.")
+    tenure_band = _formula_tenure_band(df, m)
+    revenue_band = _formula_revenue_band(df, m)
+    return (revenue_band.fillna("Unknown") + "-" + tenure_band.fillna("Unknown")).astype("string")
+
+
 def _build_recipe_registry() -> list[BusinessColumnRecipe]:
     # Target columns must not exist to be suggested.
     # Required columns specify the existence checks for those inputs.
@@ -188,13 +290,148 @@ def _build_recipe_registry() -> list[BusinessColumnRecipe]:
             optional_columns=("requested_features", "requirements_list"),
             formula=_formula_requirements,
         ),
+        BusinessColumnRecipe(
+            target_column="Tenure Band",
+            display_name="Tenure Band",
+            description="Customer tenure grouping for lifecycle analysis.",
+            required_columns=("tenure",),
+            optional_columns=("tenure_months", "customer_tenure"),
+            formula=_formula_tenure_band,
+        ),
+        BusinessColumnRecipe(
+            target_column="Revenue Band",
+            display_name="Revenue Band",
+            description="Revenue/charges stratification into low, medium, and high tiers.",
+            required_columns=("monthly_charges",),
+            optional_columns=("monthly_revenue", "revenue", "sales"),
+            formula=_formula_revenue_band,
+        ),
+        BusinessColumnRecipe(
+            target_column="Loyalty Tier",
+            display_name="Loyalty Tier",
+            description="Deterministic customer loyalty tier derived from tenure.",
+            required_columns=("tenure",),
+            optional_columns=("tenure_months", "customer_tenure"),
+            formula=_formula_loyalty_tier,
+        ),
+        BusinessColumnRecipe(
+            target_column="High Value Customer",
+            display_name="High Value Customer",
+            description="Flags customers in the top spend/revenue quartile.",
+            required_columns=("monthly_charges",),
+            optional_columns=("monthly_revenue", "revenue", "sales"),
+            formula=_formula_high_value_customer,
+        ),
+        BusinessColumnRecipe(
+            target_column="Contract Category",
+            display_name="Contract Category",
+            description="Normalized contract grouping for churn and retention analysis.",
+            required_columns=("contract_type",),
+            optional_columns=("contract",),
+            formula=_formula_contract_category,
+        ),
+        BusinessColumnRecipe(
+            target_column="Payment Risk",
+            display_name="Payment Risk",
+            description="Payment method risk categorization for churn review.",
+            required_columns=("payment_method",),
+            optional_columns=("payment", "payment_type"),
+            formula=_formula_payment_risk,
+        ),
+        BusinessColumnRecipe(
+            target_column="Churn Risk",
+            display_name="Churn Risk",
+            description="Composite churn risk indicator using churn status and account context.",
+            required_columns=("churn",),
+            optional_columns=("tenure", "monthly_charges", "monthly_revenue", "revenue"),
+            formula=_formula_churn_risk,
+        ),
+        BusinessColumnRecipe(
+            target_column="Customer Segment",
+            display_name="Customer Segment",
+            description="Segment label built from tenure and revenue bands.",
+            required_columns=("tenure", "monthly_charges"),
+            optional_columns=("tenure_months", "customer_tenure", "monthly_revenue", "revenue"),
+            formula=_formula_customer_segment,
+        ),
     ]
 
 
 RECIPE_REGISTRY: list[BusinessColumnRecipe] = _build_recipe_registry()
 
+DOMAIN_RECIPE_PRIORITIES: dict[str, tuple[str, ...]] = {
+    "sales": ("Revenue", "Profit", "Margin %"),
+    "customer churn": (
+        "Churn Risk",
+        "Customer Segment",
+        "Revenue Band",
+        "Tenure Band",
+        "Loyalty Tier",
+        "High Value Customer",
+        "Contract Category",
+        "Payment Risk",
+        "Age Group",
+    ),
+    "telecom": (
+        "Churn Risk",
+        "Customer Segment",
+        "Revenue Band",
+        "Tenure Band",
+        "Loyalty Tier",
+        "High Value Customer",
+        "Contract Category",
+        "Payment Risk",
+    ),
+    "healthcare": ("Age Group", "Risk Category", "Requirements"),
+    "finance": ("Profit", "Margin %", "Revenue", "Risk Category"),
+    "retail": ("Revenue", "Profit", "Margin %"),
+    "ecommerce": ("Revenue", "Profit", "Margin %"),
+    "generic business dataset": (),
+    "generic analytics": (),
+}
 
-def detect_available_recipes(df: pd.DataFrame) -> list[dict[str, Any]]:
+
+def _domain_name(domain_context: dict[str, Any] | str | None) -> str:
+    if isinstance(domain_context, str):
+        return domain_context.strip().lower()
+    if isinstance(domain_context, dict):
+        for key in ("detected_domain", "domain"):
+            value = domain_context.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower()
+        detection = domain_context.get("detection")
+        if isinstance(detection, dict):
+            value = detection.get("domain")
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower()
+        nested = domain_context.get("domain_context")
+        if isinstance(nested, dict):
+            value = nested.get("detected_domain")
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower()
+    return "generic business dataset"
+
+
+def _priority_for_recipe(target: str, domain_name: str) -> int:
+    preferred = DOMAIN_RECIPE_PRIORITIES.get(domain_name, ())
+    if not preferred:
+        return 99
+    try:
+        return preferred.index(target)
+    except ValueError:
+        return 99
+
+
+def _domain_hint_text(target: str, domain_name: str) -> str:
+    if domain_name in {"generic business dataset", "generic analytics"}:
+        return ""
+    prioritized = _priority_for_recipe(target, domain_name) < 99
+    if prioritized:
+        return f" Prioritized for {domain_name.title()} context."
+    return f" Available for {domain_name.title()} context when source columns are present."
+
+
+def detect_available_recipes(df: pd.DataFrame, domain_context: dict[str, Any] | str | None = None) -> list[dict[str, Any]]:
     """
     Returns suggestion objects without mutating df.
     Each suggestion includes:
@@ -207,6 +444,7 @@ def detect_available_recipes(df: pd.DataFrame) -> list[dict[str, Any]]:
     # source columns like `revenue` / `profit` as calculated targets `Revenue` / `Profit`.
     existing_targets = set(df.columns)
 
+    domain_name = _domain_name(domain_context)
     suggestions: list[dict[str, Any]] = []
 
     def _resolve_any_columns(candidates: tuple[str, ...]) -> list[str]:
@@ -243,13 +481,50 @@ def detect_available_recipes(df: pd.DataFrame) -> list[dict[str, Any]]:
             {
                 "target_column": recipe.target_column,
                 "display_name": recipe.display_name,
-                "description": recipe.description,
+                "description": recipe.description + _domain_hint_text(recipe.target_column, domain_name),
                 "depends_on_columns": depends_on + _resolve_any_columns(recipe.optional_columns),
+                "domain_context": domain_name,
+                "domain_priority": _priority_for_recipe(recipe.target_column, domain_name),
                 "recipe": recipe,
             }
         )
 
+    suggestions.sort(key=lambda item: (int(item.get("domain_priority", 99)), item.get("target_column", "")))
     return suggestions
+
+
+def generate_domain_business_questions(domain_context: dict[str, Any] | str | None = None) -> list[str]:
+    domain_name = _domain_name(domain_context)
+    churn_questions = [
+        "Which customers have high churn risk with high revenue impact?",
+        "How does churn risk vary by contract category and payment risk?",
+        "Which tenure bands need immediate retention campaigns?",
+        "What share of high-value customers are at medium/high churn risk?",
+        "Which customer segments should be prioritized for loyalty incentives?",
+    ]
+    sales_questions = [
+        "Which regions drive the largest revenue and margin contribution?",
+        "Where is margin erosion concentrated by product or segment?",
+        "Which segments should receive immediate upsell focus?",
+    ]
+    healthcare_questions = [
+        "Which cohorts show elevated clinical risk indicators?",
+        "How do risk categories shift across age and diagnosis groups?",
+        "Which population segment should be prioritized for intervention?",
+    ]
+    generic_questions = [
+        "Which segments are driving the largest performance changes?",
+        "What is the highest-priority risk in the current dataset?",
+        "Which action would create the most immediate business value?",
+    ]
+
+    if domain_name in {"customer churn", "telecom"}:
+        return churn_questions
+    if domain_name == "sales":
+        return sales_questions
+    if domain_name == "healthcare":
+        return healthcare_questions
+    return generic_questions
 
 
 def generate_preview_rows(df: pd.DataFrame, recipe: BusinessColumnRecipe, preview_rows: int = 10) -> list[dict[str, Any]]:

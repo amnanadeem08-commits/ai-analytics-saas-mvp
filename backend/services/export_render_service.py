@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import matplotlib
@@ -17,7 +18,43 @@ from backend.utils.plotly_kaleido_compat import disable_kaleido_headers
 
 logger = logging.getLogger(__name__)
 disable_kaleido_headers()
+@dataclass(frozen=True)
+class ExportChart:
+    chart: dict[str, Any]
+    png: bytes
 
+    @property
+    def chart_id(self) -> str:
+        return str(self.chart.get("chart_id") or "")
+
+    @property
+    def title(self) -> str:
+        return str(self.chart.get("title") or "Chart")
+
+    @property
+    def chart_type(self) -> str:
+        return str(self.chart.get("chart_type") or "chart")
+
+
+@dataclass(frozen=True)
+class ExportBundle:
+    report: dict[str, Any]
+    charts: list[ExportChart]
+    requested_chart_count: int
+    chart_ids: list[str] | None = None
+
+    @property
+    def rendered_chart_count(self) -> int:
+        return len(self.charts)
+
+    @property
+    def validation(self) -> dict[str, Any]:
+        return {
+            "requested_chart_count": self.requested_chart_count,
+            "rendered_chart_count": self.rendered_chart_count,
+            "missing_chart_count": max(self.requested_chart_count - self.rendered_chart_count, 0),
+            "chart_ids": [chart.chart_id for chart in self.charts if chart.chart_id],
+        }
 
 def filter_charts(report: dict[str, Any], chart_ids: list[str] | None = None) -> list[dict[str, Any]]:
     charts = report.get("chart_specs", [])
@@ -413,3 +450,31 @@ def build_dashboard_snapshot(report: dict[str, Any], chart_ids: list[str] | None
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
+def build_export_bundle(
+    report: dict[str, Any],
+    chart_ids: list[str] | None = None,
+    width: int = 980,
+    height: int = 520,
+) -> ExportBundle:
+    """Create a validated export bundle shared by PDF, PPTX, Excel, and snapshots."""
+    selected_charts = filter_charts(report, chart_ids)
+    rendered: list[ExportChart] = []
+    for chart in selected_charts:
+        png = chart_to_png_bytes(chart, width=width, height=height)
+        if png and _valid_png_bytes(png):
+            rendered.append(ExportChart(chart=chart, png=png))
+        else:
+            logger.warning("Chart %s was selected for export but could not be rendered", chart.get("chart_id", "unknown"))
+    return ExportBundle(
+        report=report,
+        charts=rendered,
+        requested_chart_count=len(selected_charts),
+        chart_ids=chart_ids,
+    )
+
+
+def validate_export_bundle(bundle: ExportBundle) -> dict[str, Any]:
+    validation = bundle.validation
+    validation["is_valid"] = bundle.requested_chart_count == 0 or bundle.rendered_chart_count > 0
+    validation["has_visuals"] = bundle.rendered_chart_count > 0
+    return validation

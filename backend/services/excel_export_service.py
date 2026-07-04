@@ -5,8 +5,11 @@ from typing import Any
 
 import pandas as pd
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+from openpyxl.drawing.image import Image as OpenPyxlImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+
+from backend.services.export_render_service import build_export_bundle
 
 
 HEADER_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
@@ -136,7 +139,7 @@ def _write_kpis(ws, row: int, kpis: list[dict[str, Any]]) -> int:
 
     for card in kpis[:16]:
         ws.cell(row=row, column=1, value=card.get("label", ""))
-        ws.cell(row=row, column=2, value=card.get("value", ""))
+        ws.cell(row=row, column=2, value=card.get("formatted_value", card.get("value", "")))
         ws.cell(row=row, column=3, value=_coerce_float(card.get("delta_percentage")))
         ws.cell(row=row, column=4, value=str(card.get("status", "")).title())
         row += 1
@@ -234,7 +237,7 @@ def _write_storyboard_summary(wb, report: dict[str, Any]) -> None:
     row += 1
     for card in kpis[:12]:
         ws.cell(row=row, column=1, value=card.get("label", ""))
-        ws.cell(row=row, column=2, value=card.get("value", ""))
+        ws.cell(row=row, column=2, value=card.get("formatted_value", card.get("value", "")))
         ws.cell(row=row, column=3, value=card.get("status", ""))
         ws.cell(row=row, column=4, value=card.get("business_context", card.get("description", "")))
         row += 1
@@ -282,6 +285,158 @@ def _write_storyboard_summary(wb, report: dict[str, Any]) -> None:
             cell.border = THIN_BORDER
     _autofit_columns(ws)
 
+
+def _write_stats_summary(wb, summary: dict[str, Any]) -> None:
+    ws = wb.create_sheet("Stats Summary")
+    ws["A1"] = "Stats Summary"
+    ws["A1"].font = Font(size=14, bold=True, color="1F4E78")
+    row = 3
+    for key, value in summary.items():
+        if isinstance(value, dict):
+            ws.cell(row=row, column=1, value=str(key).replace("_", " ").title()).fill = SECTION_FILL
+            ws.cell(row=row, column=1).font = HEADER_FONT
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+            row += 1
+            for inner_key, inner_value in value.items():
+                ws.cell(row=row, column=1, value=str(inner_key))
+                ws.cell(row=row, column=2, value=str(inner_value))
+                row += 1
+        elif isinstance(value, list):
+            ws.cell(row=row, column=1, value=str(key).replace("_", " ").title())
+            ws.cell(row=row, column=2, value=str(value[:20]))
+            row += 1
+        else:
+            ws.cell(row=row, column=1, value=str(key).replace("_", " ").title())
+            ws.cell(row=row, column=2, value=value)
+            row += 1
+    _autofit_columns(ws)
+
+
+def _write_ai_insights_sheet(wb, report: dict[str, Any]) -> None:
+    ws = wb.create_sheet("AI Insights")
+    ws["A1"] = "AI Insights"
+    ws["A1"].font = Font(size=14, bold=True, color="1F4E78")
+    headers = ["Type", "Title", "Meaning", "Evidence", "Recommendation"]
+    for idx, header in enumerate(headers, start=1):
+        ws.cell(row=3, column=idx, value=header).fill = HEADER_FILL
+        ws.cell(row=3, column=idx).font = HEADER_FONT
+    cards = report.get("ai_business_insights", {}).get("cards", []) or report.get("executive_summary", {}).get("decision_framework", [])
+    row = 4
+    if cards:
+        for card in cards[:50]:
+            ws.cell(row=row, column=1, value=card.get("type", "Insight"))
+            ws.cell(row=row, column=2, value=card.get("title", card.get("what_happened", "Insight")))
+            ws.cell(row=row, column=3, value=card.get("business_meaning", card.get("why_it_happened", "")))
+            ws.cell(row=row, column=4, value=card.get("supporting_evidence", card.get("expected_impact", "")))
+            ws.cell(row=row, column=5, value=card.get("executive_recommendation", card.get("what_to_do", "")))
+            row += 1
+    else:
+        executive = report.get("executive_summary", {})
+        ws.cell(row=row, column=1, value="Executive Summary")
+        ws.cell(row=row, column=2, value=executive.get("insight", ""))
+        ws.cell(row=row, column=3, value=executive.get("reason", ""))
+        ws.cell(row=row, column=5, value=executive.get("action", ""))
+    _autofit_columns(ws)
+
+
+def _first_datetime_column(raw_df: pd.DataFrame) -> str | None:
+    for column in raw_df.columns:
+        if any(token in str(column).lower() for token in ("date", "time", "month", "year")):
+            parsed = pd.to_datetime(raw_df[column], errors="coerce")
+            if parsed.notna().sum() >= max(2, int(len(raw_df) * 0.4)):
+                return column
+    return None
+
+
+def _write_pivot_table(ws, start_row: int, title: str, pivot_df: pd.DataFrame, chart_title: str) -> int:
+    ws.merge_cells(start_row=start_row, start_column=1, end_row=start_row, end_column=4)
+    ws.cell(row=start_row, column=1, value=title)
+    ws.cell(row=start_row, column=1).fill = SECTION_FILL
+    ws.cell(row=start_row, column=1).font = HEADER_FONT
+    header_row = start_row + 1
+
+    ws.cell(row=header_row, column=1, value=str(pivot_df.columns[0]))
+    ws.cell(row=header_row, column=2, value=str(pivot_df.columns[1]))
+    ws.cell(row=header_row, column=1).fill = HEADER_FILL
+    ws.cell(row=header_row, column=2).fill = HEADER_FILL
+    ws.cell(row=header_row, column=1).font = HEADER_FONT
+    ws.cell(row=header_row, column=2).font = HEADER_FONT
+
+    write_row = header_row + 1
+    for _, row in pivot_df.iterrows():
+        ws.cell(row=write_row, column=1, value=str(row.iloc[0]))
+        ws.cell(row=write_row, column=2, value=_coerce_float(row.iloc[1]))
+        write_row += 1
+
+    end_row = write_row - 1
+    _apply_table_format(ws, header_row, end_row, 2)
+
+    if end_row - header_row >= 2:
+        chart = BarChart()
+        chart.title = chart_title[:120]
+        chart.height = 6
+        chart.width = 10
+        data_ref = Reference(ws, min_col=2, min_row=header_row, max_row=end_row)
+        cats_ref = Reference(ws, min_col=1, min_row=header_row + 1, max_row=end_row)
+        chart.add_data(data_ref, titles_from_data=True)
+        chart.set_categories(cats_ref)
+        ws.add_chart(chart, f"E{start_row}")
+
+    return max(write_row + 2, start_row + 22)
+
+
+def _write_pivot_tables_sheet(wb, raw_df: pd.DataFrame) -> None:
+    ws = wb.create_sheet("Pivot Tables")
+    ws["A1"] = "Pivot Tables"
+    ws["A1"].font = Font(size=14, bold=True, color="1F4E78")
+    row = 3
+
+    numeric_columns = raw_df.select_dtypes(include="number").columns.tolist()
+    categorical_columns = [column for column in raw_df.columns if column not in numeric_columns]
+    datetime_column = _first_datetime_column(raw_df)
+
+    generated = 0
+    if numeric_columns and categorical_columns:
+        metric = numeric_columns[0]
+        dimension = categorical_columns[0]
+        pivot = (
+            raw_df.assign(_metric=pd.to_numeric(raw_df[metric], errors="coerce"))
+            .groupby(dimension, dropna=False)["_metric"]
+            .sum()
+            .sort_values(ascending=False)
+            .head(12)
+            .reset_index()
+        )
+        if not pivot.empty:
+            pivot.columns = [dimension, f"Total {metric}"]
+            row = _write_pivot_table(ws, row, f"Pivot: Total {metric} by {dimension}", pivot, f"Total {metric} by {dimension}")
+            generated += 1
+
+    if numeric_columns and datetime_column:
+        metric = numeric_columns[0]
+        work = raw_df[[datetime_column, metric]].copy()
+        work[datetime_column] = pd.to_datetime(work[datetime_column], errors="coerce")
+        work[metric] = pd.to_numeric(work[metric], errors="coerce")
+        work = work.dropna()
+        if not work.empty:
+            work["Month"] = work[datetime_column].dt.to_period("M").astype(str)
+            pivot = work.groupby("Month")[metric].mean().sort_index().head(12).reset_index()
+            pivot.columns = ["Month", f"Average {metric}"]
+            row = _write_pivot_table(ws, row, f"Pivot: Average {metric} by Month", pivot, f"Average {metric} by Month")
+            generated += 1
+
+    if generated == 0:
+        fallback = pd.DataFrame(
+            {
+                "Column": raw_df.columns.astype(str).tolist(),
+                "Non-missing Records": [int(raw_df[column].notna().sum()) for column in raw_df.columns],
+            }
+        )
+        _write_pivot_table(ws, row, "Pivot: Column Completeness", fallback.head(15), "Column Completeness")
+
+    _autofit_columns(ws)
+
+
 def build_executive_excel(
     report: dict[str, Any],
     raw_df: pd.DataFrame,
@@ -292,6 +447,7 @@ def build_executive_excel(
     buffer = io.BytesIO()
     selected = set(chart_ids or [])
     charts = [chart for chart in report.get("chart_specs", []) if not selected or chart.get("chart_id") in selected]
+    export_bundle = build_export_bundle(report, chart_ids, width=920, height=480)
     kpis = report.get("kpi_cards", []) or _fallback_kpis(raw_df)
     executive = report.get("executive_summary", {})
 
@@ -311,11 +467,24 @@ def build_executive_excel(
         next_row = _write_kpis(summary_ws, 5, kpis)
         next_row = _write_insights(summary_ws, next_row, executive)
 
+        _write_stats_summary(wb, summary)
+        _write_ai_insights_sheet(wb, report)
+        _write_pivot_tables_sheet(wb, raw_df)
+
         visual_ws = wb.create_sheet("Visual Dashboard")
         visual_ws["A1"] = "Executive Visual Dashboard"
         visual_ws["A1"].font = Font(size=14, bold=True, color="1F4E78")
         chart_row = 3
         chart_added = 0
+        for export_chart in export_bundle.charts[:6]:
+            visual_ws.cell(row=chart_row, column=1, value=export_chart.title).font = Font(bold=True)
+            image = OpenPyxlImage(io.BytesIO(export_chart.png))
+            image.width = 640
+            image.height = 340
+            visual_ws.add_image(image, f"A{chart_row + 1}")
+            chart_row += 22
+            chart_added += 1
+
         for chart in charts[:6]:
             labels, values = _chart_rows_from_spec(chart)
             chart_type = "line" if chart.get("chart_type") in {"line"} else "pie" if chart.get("chart_type") == "pie" else "bar"

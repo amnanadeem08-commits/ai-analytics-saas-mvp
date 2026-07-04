@@ -85,7 +85,21 @@ def build_data_insights(df: pd.DataFrame | None) -> dict[str, Any]:
             "overall_data_quality_score": quality.get("score", 0),
             "grade": quality.get("grade", "D"),
         },
-        "kpi_discovery": [{"kpi_id": card.get("kpi_id"), "metric_name": card.get("label"), "value": card.get("value"), "category": card.get("category"), "business_purpose": card.get("business_context") or card.get("description"), "confidence_score": card.get("confidence_score", 0.75), "traceability": card.get("evidence", {})} for card in kpi_cards],
+        "kpi_discovery": [
+            {
+                "kpi_id": card.get("kpi_id"),
+                "metric_name": card.get("label"),
+                "value": card.get("value"),
+                "formatted_value": card.get("formatted_value"),
+                "aggregation": card.get("aggregation"),
+                "unit": card.get("unit"),
+                "category": card.get("category"),
+                "business_purpose": card.get("business_context") or card.get("description"),
+                "confidence_score": card.get("confidence_score", 0.75),
+                "traceability": card.get("evidence", {}),
+            }
+            for card in kpi_cards
+        ],
         "statistical_profile": statistical_profile,
         "business_validation": validation,
         "outlier_assessment": outliers,

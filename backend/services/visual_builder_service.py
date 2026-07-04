@@ -11,6 +11,7 @@ from backend.processing.schema_service import build_column_schema
 from backend.services.chart_service import _layout, _spec
 from backend.services.dataset_service import load_dataset_dataframe
 from backend.services.filter_service import apply_filters, build_filter_options
+from backend.services.metric_suitability_service import metric_suitability
 from backend.utils.response_utils import to_json_safe
 
 
@@ -426,7 +427,11 @@ def _aggregate(df: pd.DataFrame, dimension: str, measure: str | None, aggregatio
         return grouped
 
     agg = aggregation.lower()
-    if agg not in {"sum", "mean", "count", "min", "max"}:
+    if agg == "auto":
+        agg = "mean" if metric_suitability(measure, df[measure]).get("recommended_aggregation") == "average" else metric_suitability(measure, df[measure]).get("recommended_aggregation", "sum")
+    if agg == "average":
+        agg = "mean"
+    if agg not in {"sum", "mean", "median", "count", "min", "max"}:
         agg = "sum"
     work = df[[dimension, measure]].copy()
     work[measure] = pd.to_numeric(work[measure], errors="coerce")
@@ -445,8 +450,10 @@ def _friendly_title(chart_type: str, dimension: str, measure: str | None, aggreg
         return f"{_display_label(measure)} Trend by {_display_label(dimension)}"
     if chart_type == "horizontal_bar":
         return f"Top {_display_label(dimension)} by {_display_label(measure)}"
-    if aggregation == "mean":
+    if aggregation in {"mean", "average", "auto"}:
         return f"Average {_display_label(measure)} by {_display_label(dimension)}"
+    if aggregation == "median":
+        return f"Median {_display_label(measure)} by {_display_label(dimension)}"
     return f"{_display_label(measure)} by {_display_label(dimension)}"
 
 

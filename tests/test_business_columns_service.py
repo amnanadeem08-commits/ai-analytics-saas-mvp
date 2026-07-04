@@ -6,6 +6,7 @@ from frontend.services.business_columns_service import (
     BusinessColumnRecipe,
     create_business_columns,
     detect_available_recipes,
+    generate_domain_business_questions,
     generate_preview_rows,
     recipe_by_target,
 )
@@ -59,6 +60,47 @@ def test_detect_available_recipes_missing_dependency_excludes_recipe():
     # other recipes should still be possible based on their own deps
     assert "Profit" in targets
     assert "Margin %" in targets
+
+
+def test_detect_available_recipes_ranks_by_domain_context():
+    df = _base_df()
+
+    suggestions = detect_available_recipes(df, domain_context={"domain": "Sales"})
+    ordered_targets = [item["target_column"] for item in suggestions]
+
+    assert ordered_targets[:3] == ["Revenue", "Profit", "Margin %"]
+    assert suggestions[0]["domain_context"] == "sales"
+    assert "sales context" in suggestions[0]["description"].lower()
+
+
+def test_customer_churn_domain_prioritizes_churn_business_columns():
+    df = pd.DataFrame(
+        {
+            "customer_id": ["C1", "C2", "C3", "C4"],
+            "churn": ["Yes", "No", "Yes", "No"],
+            "tenure": [2, 12, 3, 24],
+            "monthly_charges": [95, 40, 88, 55],
+            "contract_type": ["Month-to-month", "Two year", "Month-to-month", "One year"],
+            "payment_method": ["Electronic check", "Bank transfer", "Electronic check", "Mailed check"],
+            "age": [21, 49, 35, 58],
+        }
+    )
+
+    suggestions = detect_available_recipes(df, domain_context={"domain": "Customer Churn"})
+    ordered = [item["target_column"] for item in suggestions]
+
+    assert ordered[0] == "Churn Risk"
+    assert "Customer Segment" in ordered[:4]
+    assert "Revenue Band" in ordered[:5]
+    assert ordered.index("Age Group") > ordered.index("Payment Risk")
+
+
+def test_generate_domain_business_questions_for_churn():
+    questions = generate_domain_business_questions({"domain": "Customer Churn"})
+
+    assert questions
+    assert any("churn risk" in q.lower() for q in questions)
+    assert any("retention" in q.lower() or "loyalty" in q.lower() for q in questions)
 
 
 def test_recipe_by_target_works():

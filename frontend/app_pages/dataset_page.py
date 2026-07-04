@@ -61,10 +61,12 @@ from frontend.utils.local_helpers import (
     select_dataset,
 )
 
+from frontend.services.domain_detection_service import update_session_detected_domain
 from frontend.services.business_columns_service import (
     BusinessColumnRecipe,
     create_business_columns,
     detect_available_recipes,
+    generate_domain_business_questions,
     generate_preview_rows,
     recipe_by_target,
 )
@@ -330,13 +332,26 @@ def _render_ai_business_column_suggestions(dataset_id: str) -> None:
         st.info("Upload a dataset to enable calculated business column suggestions.")
         return
 
-    st.subheader("AI Business Column Suggestions")
-    st.caption("Suggestions are based only on existing dataset columns. No changes are applied until you create selected columns.")
+    detected = update_session_detected_domain(dataset_id, df=df, title=str(dataset_id))
+    detected_domain = str(detected.get("domain", "Generic Business Dataset"))
 
-    suggestions = detect_available_recipes(df)
+    st.subheader("AI Business Column Suggestions")
+    st.caption(
+        "Suggestions are based only on existing dataset columns and are ranked by detected domain context. "
+        "No changes are applied until you create selected columns."
+    )
+    st.caption(f"Detected domain context: {detected_domain}")
+
+    suggestions = detect_available_recipes(df, domain_context=detected)
     if not suggestions:
         st.info("No deterministic business calculated columns can be suggested from the current columns.")
         return
+
+    questions = generate_domain_business_questions(detected)
+    if questions:
+        with st.expander("Domain-aware business questions", expanded=True):
+            for question in questions:
+                st.write(f"- {question}")
 
     with st.form(f"business_columns_form_{dataset_id}"):
         selected_targets: list[str] = []

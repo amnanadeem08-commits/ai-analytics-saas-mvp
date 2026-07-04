@@ -6,6 +6,56 @@ import re
 import pandas as pd
 import streamlit as st
 
+KPI_AGGREGATION_OPTIONS = ["Auto", "Average", "Sum", "Median", "Min", "Max", "Count"]
+
+
+def _kpi_unit_for_column(column: str) -> str:
+    lowered = str(column).lower().replace(" ", "_").replace("-", "_")
+    if lowered == "age" or lowered.endswith("_age"):
+        return "years"
+    if "daily_social_media_hours" in lowered:
+        return "h/day"
+    if "sleep" in lowered and "hour" in lowered:
+        return "h"
+    if "screen_time_before_sleep" in lowered:
+        return "h"
+    if "hour" in lowered or "duration" in lowered:
+        return "h"
+    return ""
+
+
+def _auto_kpi_aggregation(column: str) -> str:
+    lowered = str(column).lower().replace(" ", "_").replace("-", "_")
+    if lowered == "id" or lowered.endswith("_id") or any(token in lowered for token in ["name", "category"]):
+        return "count"
+    if any(token in lowered for token in ["revenue", "sales", "profit", "cost", "expense", "amount", "income", "spend"]):
+        return "sum"
+    if any(token in lowered for token in ["age", "hour", "sleep", "duration", "score", "rating", "percentage", "percent", "screen_time", "social_media"]):
+        return "average"
+    return "average"
+
+
+def _aggregate_kpi_series(series: pd.Series, aggregation: str) -> float:
+    clean = pd.to_numeric(series, errors="coerce").dropna()
+    if aggregation == "count":
+        return float(series.dropna().count())
+    if clean.empty:
+        return 0.0
+    if aggregation == "sum":
+        return float(clean.sum())
+    if aggregation == "median":
+        return float(clean.median())
+    if aggregation == "min":
+        return float(clean.min())
+    if aggregation == "max":
+        return float(clean.max())
+    return float(clean.mean())
+
+
+def _aggregation_label(aggregation: str) -> str:
+    return {"average": "Avg", "sum": "Total", "median": "Median", "min": "Min", "max": "Max", "count": "Count"}.get(aggregation, aggregation.title())
+
+
 def build_default_kpis(df: pd.DataFrame, dataset_id: str, domain_context: str | None = None) -> list[dict]:
     numeric, categorical, datetime_cols = local_column_groups(df)
     domain = _infer_domain_context(df, domain_context)
@@ -15,8 +65,10 @@ def build_default_kpis(df: pd.DataFrame, dataset_id: str, domain_context: str | 
     missing = int(summary.get("total_missing_values", 0) or 0)
     duplicate_rows = int(summary.get("duplicate_rows", 0) or 0)
 
-    def card(kpi_id: str, title: str, value: object, metric_type: str, method: str, status: str, explanation: str, evidence: str) -> dict:
+    def card(kpi_id: str, title: str, value: object, metric_type: str, method: str, status: str, explanation: str, evidence: str, aggregation: str | None = None, unit: str = "") -> dict:
         formatted = _format_kpi_value(value, metric_type)
+        if unit and isinstance(value, (int, float)) and pd.notna(value):
+            formatted = f"{formatted} {unit}"
         return {
             "kpi_id": kpi_id,
             "title": title,
@@ -26,6 +78,9 @@ def build_default_kpis(df: pd.DataFrame, dataset_id: str, domain_context: str | 
             "formatted_value": formatted,
             "metric_type": metric_type,
             "calculation_method": method,
+            "aggregation": aggregation,
+            "aggregation_options": KPI_AGGREGATION_OPTIONS,
+            "unit": unit,
             "sample_size": rows,
             "status": status,
             "short_interpretation": explanation,
@@ -51,10 +106,16 @@ def build_default_kpis(df: pd.DataFrame, dataset_id: str, domain_context: str | 
         series = pd.to_numeric(df[column], errors="coerce").dropna()
         if series.empty:
             continue
+        aggregation = _auto_kpi_aggregation(column)
+        unit = _kpi_unit_for_column(column)
         is_rate = any(token in str(column).lower() for token in ["rate", "pct", "percent", "churn", "risk"])
-        value = float(series.mean() * 100) if is_rate and series.max() <= 1 else float(series.mean())
+        value = _aggregate_kpi_series(df[column], aggregation)
+        if is_rate and aggregation == "average" and series.max() <= 1:
+            value = value * 100
         metric_type = "percent" if is_rate else "number"
-        kpis.append(card(f"avg_{_kpi_id_from_label(column)}", f"Average {column}", value, metric_type, f"Mean of numeric column {column}", "neutral", f"The typical {column} value is {_format_kpi_value(value, metric_type)} across valid records.", f"Based on {len(series):,} non-empty values; median is {_format_kpi_value(float(series.median()))}."))
+        label = f"{_aggregation_label(aggregation)} {str(column).replace('_', ' ').title()}"
+        formatted = _format_kpi_value(value, metric_type) + (f" {unit}" if unit and metric_type != "percent" else "")
+        kpis.append(card(f"{aggregation}_{_kpi_id_from_label(column)}", label, value, metric_type, f"{_aggregation_label(aggregation)} of numeric column {column}", "neutral", f"The {aggregation} {column} value is {formatted} across valid records.", f"Based on {len(series):,} non-empty values; median is {_format_kpi_value(float(series.median()))}.", aggregation=aggregation, unit=unit))
 
     for column in categorical[:2]:
         counts = df[column].astype("string").fillna("Unknown").value_counts()

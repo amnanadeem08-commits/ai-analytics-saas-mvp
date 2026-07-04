@@ -9,7 +9,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.util import Inches, Pt
 
-from backend.services.export_render_service import chart_to_png_bytes, filter_charts
+from backend.services.export_render_service import build_export_bundle
 
 
 SLIDE_W = 13.333
@@ -134,7 +134,7 @@ def _add_kpi_card(slide, card: dict[str, Any], x: float, y: float, w: float, col
     frame.paragraphs[0].font.size = Pt(9)
     frame.paragraphs[0].font.color.rgb = RGBColor(90, 98, 112)
     p = frame.add_paragraph()
-    p.text = str(card.get("value", ""))[:22]
+    p.text = str(card.get("formatted_value", card.get("value", "")))[:22]
     p.font.size = Pt(18)
     p.font.bold = True
     p.font.color.rgb = color
@@ -157,7 +157,8 @@ def build_executive_pptx(
     prs = Presentation()
     prs.slide_width = Inches(SLIDE_W)
     prs.slide_height = Inches(SLIDE_H)
-    rendered_charts = [(chart, png) for chart in filter_charts(report, chart_ids) if (png := chart_to_png_bytes(chart, width=1060, height=540))]
+    export_bundle = build_export_bundle(report, chart_ids, width=1060, height=540)
+    rendered_charts = export_bundle.charts
 
     cover = _new_slide(
         prs,
@@ -229,7 +230,9 @@ def build_executive_pptx(
         )
     _add_bullet_slides(prs, "Root Cause Analysis", "What / Why / Action", framework_items, branding, primary)
 
-    for chart, png in rendered_charts:
+    for export_chart in rendered_charts:
+        chart = export_chart.chart
+        png = export_chart.png
         slide = _new_slide(prs, chart.get("title", "Dashboard Visual"), chart.get("chart_type", "Chart").title(), branding, primary)
         slide.shapes.add_picture(io.BytesIO(png), Inches(0.72), Inches(1.55), width=Inches(11.9), height=Inches(4.82))
 
@@ -302,12 +305,18 @@ def build_storyboard_pptx(
     _add_bullet_slides(prs, "AI Business Insights", "Existing Phase 4 cards", insight_items or ["No AI Business Insight cards are available."], branding, primary)
 
     charts = _storyboard_section(storyboard, "executive_charts").get("charts", [])
+    if not charts:
+        charts = report.get("chart_specs", [])
     if chart_ids:
         selected = set(chart_ids)
         charts = [chart for chart in charts if chart.get("chart_id") in selected]
-    rendered_charts = [(chart, png) for chart in charts if (png := chart_to_png_bytes(chart, width=1060, height=540))]
+    story_report = {**report, "chart_specs": charts}
+    export_bundle = build_export_bundle(story_report, None, width=1060, height=540)
+    rendered_charts = export_bundle.charts
     if rendered_charts:
-        for chart, png in rendered_charts:
+        for export_chart in rendered_charts:
+            chart = export_chart.chart
+            png = export_chart.png
             slide = _new_slide(prs, chart.get("title", "Executive Chart"), chart.get("chart_type", "Chart").title(), branding, primary)
             slide.shapes.add_picture(io.BytesIO(png), Inches(0.72), Inches(1.55), width=Inches(11.9), height=Inches(4.82))
     else:

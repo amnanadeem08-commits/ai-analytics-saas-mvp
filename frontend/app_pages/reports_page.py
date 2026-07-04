@@ -317,15 +317,14 @@ def render_presentation_mode(client: BackendClient) -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.markdown('<div class="presentation-frame">', unsafe_allow_html=True)
-    st.markdown(f'<div class="presentation-title">{slide["title"]}</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="presentation-subtitle">{branding.get("company_name", "AI Analytics")} | Slide {index + 1} of {len(slides)}</div>', unsafe_allow_html=True)
-    if slide.get("kpis"):
-        _render_kpi_cards(slide["kpis"], theme, key_prefix="executive_dashboard")
-    for item in slide.get("body", []):
-        if item:
-            st.markdown(f'<div class="presentation-body">{item}</div>', unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown(f'<div class="presentation-title">{slide["title"]}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="presentation-subtitle">{branding.get("company_name", "AI Analytics")} | Slide {index + 1} of {len(slides)}</div>', unsafe_allow_html=True)
+        if slide.get("kpis"):
+            _render_kpi_cards(slide["kpis"], theme, key_prefix="executive_dashboard")
+        for item in slide.get("body", []):
+            if item:
+                st.markdown(f'<div class="presentation-body">{item}</div>', unsafe_allow_html=True)
 
     st.subheader("Download Presentation")
     chart_specs = report.get("chart_specs", [])

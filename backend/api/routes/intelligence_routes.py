@@ -4,7 +4,7 @@ from backend.api.deps import map_app_error
 from backend.services.ai_business_insight_service import build_ai_business_insights
 from backend.services.data_insights_service import build_data_insights
 from backend.services.dataset_service import load_dataset_dataframe
-from backend.services.domain_intelligence_service import build_domain_intelligence
+from backend.services.domain_intelligence_service import build_domain_context
 from backend.services.executive_storyboard_service import build_executive_storyboard
 from backend.services.geospatial_service import generate_geo_chart_specs, regional_analytics
 from backend.core.theme_manager import theme_manager
@@ -39,7 +39,7 @@ def executive_storyboard(dataset_id: str):
 @router.get("/{dataset_id}/domain")
 def domain_intelligence(dataset_id: str):
     try:
-        return build_domain_intelligence(load_dataset_dataframe(dataset_id))
+        return build_domain_context(load_dataset_dataframe(dataset_id)).to_dict()
     except Exception as exc:
         raise map_app_error(exc) from exc
 

@@ -25,6 +25,9 @@ def initialize_session_state(initial_branding: dict | None = None) -> None:
     st.session_state.setdefault("storyboard_slides", [])
     st.session_state.setdefault("active_storyboard_dataset_id", None)
     st.session_state.setdefault("storyboard_user_edited", False)
+    st.session_state.setdefault("detected_domains", {})
+    st.session_state.setdefault("active_detected_domain", {"domain": "General", "confidence_score": 0.0, "confidence": "low", "signals": []})
+    st.session_state.setdefault("detected_domain", "General")
     for setting_key, setting_value in DASHBOARD_SETTING_DEFAULTS.items():
         st.session_state.setdefault(setting_key, setting_value)
 

@@ -2,16 +2,25 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.models.domain_context_models import DomainContext
+
+
+def _domain_name(domain_context: DomainContext | dict[str, Any]) -> str:
+    if isinstance(domain_context, DomainContext):
+        return domain_context.detected_domain
+    return (domain_context.get("detection", {}) or {}).get("domain", "Generic Analytics")
 
 def build_suggested_questions(
     *,
     business_metrics: dict[str, Any],
-    domain_intelligence: dict[str, Any],
+    domain_context: DomainContext | dict[str, Any] | None = None,
+    domain_intelligence: dict[str, Any] | None = None,
     profile: dict[str, Any],
 ) -> list[str]:
     metric = business_metrics.get("primary_metric")
     segment = business_metrics.get("primary_segment")
-    domain = domain_intelligence.get("detection", {}).get("domain", "Generic Analytics")
+    source = domain_context if domain_context is not None else (domain_intelligence or {})
+    domain = _domain_name(source)
     questions: list[str] = []
 
     if metric and segment:

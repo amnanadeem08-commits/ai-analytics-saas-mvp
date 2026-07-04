@@ -1,4 +1,5 @@
-﻿from io import BytesIO
+from io import BytesIO
+from zipfile import ZipFile
 
 import pandas as pd
 from openpyxl import load_workbook
@@ -65,6 +66,7 @@ def test_storyboard_pdf_export_is_valid():
 
     assert data.startswith(b"%PDF")
     assert len(data) > 1000
+    assert b"/Subtype /Image" in data or b"/Subtype/Image" in data
 
 
 def test_storyboard_pptx_export_opens_programmatically():
@@ -72,6 +74,8 @@ def test_storyboard_pptx_export_opens_programmatically():
     deck = Presentation(BytesIO(data))
 
     assert len(deck.slides) >= 5
+    with ZipFile(BytesIO(data)) as archive:
+        assert any(name.startswith("ppt/media/image") for name in archive.namelist())
 
 
 def test_storyboard_excel_export_contains_summary_sheet():
@@ -82,3 +86,8 @@ def test_storyboard_excel_export_contains_summary_sheet():
     assert "Storyboard Summary" in workbook.sheetnames
     sheet = workbook["Storyboard Summary"]
     assert sheet["A1"].value == "Executive Storyboard Summary"
+    assert "Visual Dashboard" in workbook.sheetnames
+    assert len(workbook["Visual Dashboard"]._images) >= 1
+    assert "Pivot Tables" in workbook.sheetnames
+    pivot_sheet = workbook["Pivot Tables"]
+    assert len(pivot_sheet._charts) >= 1

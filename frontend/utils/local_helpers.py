@@ -28,6 +28,7 @@ from frontend.utils.backend_utils import (
     safe_table,
 )
 from frontend.utils.theme_manager import DEFAULT_BRANDING, THEME_PRESETS, _storyboard_theme_snapshot
+from frontend.services.domain_detection_service import update_session_detected_domain
 
 from frontend.utils.kpi_helpers import (
     _format_kpi_value,
@@ -39,6 +40,10 @@ from frontend.utils.kpi_helpers import (
     _quality_score,
     build_data_anomaly_report,
     build_default_kpis,
+    _aggregate_kpi_series,
+    _aggregation_label,
+    _auto_kpi_aggregation,
+    _kpi_unit_for_column,
 )
 
 def get_dataset_options(client: BackendClient) -> list[dict]:
@@ -130,10 +135,16 @@ def _render_local_kpis(df: pd.DataFrame, numeric_columns: list[str]) -> None:
         st.info("Select one or more numeric columns to show KPI cards.")
         return
 
+    aggregation_options = ["Auto", "Average", "Sum", "Median", "Min", "Max", "Count"]
+    selected_aggregation = st.selectbox("KPI aggregation", aggregation_options, key="local_kpi_aggregation")
     cols = st.columns(min(4, len(selected_kpis)))
     for col, column in zip(cols, selected_kpis):
-        series = pd.to_numeric(df[column], errors="coerce")
-        col.metric(column, f"{series.sum():,.2f}", f"Avg {series.mean():,.2f}")
+        aggregation = _auto_kpi_aggregation(column) if selected_aggregation == "Auto" else selected_aggregation.lower()
+        value = _aggregate_kpi_series(df[column], aggregation)
+        unit = _kpi_unit_for_column(column)
+        label = f"{_aggregation_label(aggregation)} {str(column).replace('_', ' ').title()}"
+        formatted = _format_kpi_value(value, "integer" if aggregation == "count" else "number")
+        col.metric(label, f"{formatted} {unit}".strip())
 def _render_local_chart_builder(df: pd.DataFrame, palette: list[str]) -> None:
     st.subheader("Chart Preview")
     if df.empty:
@@ -511,7 +522,12 @@ def _render_local_visual(df: pd.DataFrame, spec: dict) -> dict:
     if measure and measure in working.columns:
         values = pd.to_numeric(working[measure], errors="coerce")
         working[measure] = values
-        grouped = getattr(working.groupby(dimension, dropna=False)[measure], aggregation if aggregation in {"sum", "mean", "count", "min", "max"} else "sum")().reset_index()
+        agg = str(aggregation or "auto").lower()
+        if agg in {"auto", "average"}:
+            agg = "mean"
+        if agg not in {"sum", "mean", "median", "count", "min", "max"}:
+            agg = "mean"
+        grouped = getattr(working.groupby(dimension, dropna=False)[measure], agg)().reset_index()
         value_column = measure
     else:
         grouped = working.groupby(dimension, dropna=False).size().reset_index(name="Record Count")
@@ -527,6 +543,8 @@ def _render_local_visual(df: pd.DataFrame, spec: dict) -> dict:
         data = [go.Pie(labels=grouped[dimension], values=grouped[value_column], hole=0.35, marker={"colors": palette})]
     elif chart_type == "table":
         data = [go.Table(header={"values": [dimension, value_column]}, cells={"values": [grouped[dimension], grouped[value_column]]})]
+    elif chart_type == "horizontal_bar":
+        data = [go.Bar(x=grouped[value_column], y=grouped[dimension], orientation="h", marker={"color": palette[: len(grouped)]})]
     else:
         data = [go.Bar(x=grouped[dimension], y=grouped[value_column], marker={"color": palette[: len(grouped)]})]
     fig = go.Figure(data=data)
@@ -845,14 +863,28 @@ def _add_recommended_visual_slide(items: list[dict], df: pd.DataFrame, dataset_i
     fresh = [chart for chart in charts if chart.get("chart_id") not in existing_ids]
     if not fresh:
         return items
-    new_slide = {
-        "slide_id": f"slide_recommended_{dataset_id}_{len(items)+1}",
-        "title": "Recommended Visuals",
-        "section_type": "recommended_visuals",
-        "content": {"description": "Additional recommended visuals generated from current dataset structure."},
-        "charts": fresh[:4],
-        "kpis": [],
-        "insights": ["These visuals were added from auto-recommended chart candidates."],
-        "theme_snapshot": _storyboard_theme_snapshot(),
-    }
-    return [*items, new_slide]
+    kpis = _local_kpi_cards(df)[:6]
+    updated = [*items]
+    for offset, chart in enumerate(fresh[:4], start=1):
+        kpi = kpis[(len(updated) + offset - 1) % len(kpis)] if kpis else {"label": "Records Analyzed", "value": len(df)}
+        recommendation = {
+            "recommendation": "Review this recommended visual with its supporting KPI before adding it to an executive decision pack.",
+            "reason": "The visual was generated from valid uploaded dataset fields.",
+            "expected_impact": "Improves coverage of the storyboard with real chart evidence.",
+            "confidence": "Medium",
+        }
+        insight = f"{chart.get('title', 'Recommended visual')} adds a chart-backed view supported by {kpi.get('label', 'KPI')}."
+        updated.append(
+            {
+                "slide_id": f"slide_recommended_{dataset_id}_{len(updated)+1}",
+                "title": chart.get("title") or "Recommended Visual",
+                "section_type": "recommended_visual",
+                "content": {"description": insight, "recommendation": recommendation["recommendation"]},
+                "charts": [chart],
+                "kpis": [kpi],
+                "insights": [insight],
+                "recommendations": [recommendation],
+                "theme_snapshot": _storyboard_theme_snapshot(),
+            }
+        )
+    return updated

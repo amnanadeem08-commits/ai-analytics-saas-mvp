@@ -288,22 +288,39 @@ def render_ai_insights(client: BackendClient) -> None:
                                 st.write(f"**{key.replace('_', ' ').title()}**")
                                 st.dataframe(safe_table(value), use_container_width=True, hide_index=True)
                             else:
-                                st.json({key: value})
+                                st.write(f"**{key.replace('_', ' ').title()}**: {value}")
                     else:
                         st.write(support)
                 with c2:
                     st.markdown("##### How confident is this?")
-                    st.json(analyst)
+                    if isinstance(analyst, dict) and analyst:
+                        analyst_rows = [{"metric": str(key).replace("_", " "), "value": value} for key, value in analyst.items()]
+                        st.dataframe(pd.DataFrame(analyst_rows), use_container_width=True, hide_index=True)
+                    else:
+                        st.write(analyst)
             except requests.RequestException as exc:
                 _warn_backend_unavailable("Question answering")
 
     with tab_raw:
         st.subheader("Technical Details")
-        st.caption("Optional technical details for validation (non-insight payloads only).")
+        st.caption("Validation details shown in business-friendly format.")
         with st.expander("Domain intelligence payload", expanded=False):
-            st.json(domain_payload)
+            detection = (domain_payload or {}).get("detection") or {}
+            rows = [
+                {"field": "Detected Domain", "value": detection.get("domain", "Not available")},
+                {"field": "Confidence", "value": detection.get("confidence", "Not available")},
+                {"field": "Confidence Score", "value": detection.get("confidence_score", "Not available")},
+                {"field": "Signals", "value": ", ".join(detection.get("signals", []) or [])},
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         with st.expander("Dashboard payload summary", expanded=False):
-            st.json({k: dashboard_payload.get(k) for k in ["dataset_id", "summary", "suggested_questions"]})
+            rows = [
+                {"field": "Dataset ID", "value": dashboard_payload.get("dataset_id")},
+                {"field": "Suggested Questions", "value": len(dashboard_payload.get("suggested_questions", []) or [])},
+                {"field": "KPI Cards", "value": len(dashboard_payload.get("kpi_cards", []) or [])},
+                {"field": "Charts", "value": len(dashboard_payload.get("chart_specs", []) or [])},
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 def render_data_visual_analysis(client: BackendClient) -> None:
     st.header("Data Visual Analysis")
     st.caption("Statistical exploration, data quality, distributions, correlations, and cleaning guidance.")
@@ -371,7 +388,13 @@ def render_data_visual_analysis(client: BackendClient) -> None:
     render_summary_metrics(summary)
     _render_data_quality_panel(summary, dashboard)
     with st.expander("Column schema", expanded=True):
-        st.json(summary.get("column_types", {}))
+        col_types = summary.get("column_types", {})
+        rows = []
+        for kind, columns in (col_types or {}).items():
+            for column in columns:
+                rows.append({"column": column, "detected_type": str(kind).replace("_", " ")})
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     st.subheader("Statistical Visuals")
     render_plotly_chart_specs(dashboard)
 def render_business_visual_analysis(client: BackendClient) -> None:
