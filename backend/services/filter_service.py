@@ -37,9 +37,10 @@ def build_filter_options(df: pd.DataFrame) -> dict[str, Any]:
 
 def apply_filters(df: pd.DataFrame, filters: dict[str, Any] | None) -> pd.DataFrame:
     if not filters:
-        return df.copy()
+        return df
 
     filtered = df.copy()
+    filtered.attrs.pop("_dataset_cache_key", None)
     for column, criteria in filters.items():
         if column not in filtered.columns:
             continue

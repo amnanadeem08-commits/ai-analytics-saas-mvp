@@ -5,8 +5,13 @@ from fastapi import APIRouter, Query
 from fastapi.responses import Response
 
 from backend.api.deps import map_app_error
+from backend.services.analytics_service import get_data_summary
 from backend.services.dataset_service import load_dataset_dataframe
-from backend.services.report_payload_service import build_report_payload
+from backend.services.report_payload_service import (
+    build_report_payload,
+    filter_report_chart_specs,
+    filter_report_kpi_cards,
+)
 
 router = APIRouter(prefix="/report", tags=["Reports"])
 
@@ -40,6 +45,7 @@ def export_report(
     dataset_id: str,
     format: str = "json",
     chart_ids: list[str] | None = Query(default=None),
+    kpi_ids: list[str] | None = Query(default=None),
     package: str = "executive",
 ):
     try:
@@ -55,10 +61,8 @@ def export_report(
             )
         if fmt == "json":
             body = build_report_payload(dataset_id)
-            if chart_ids:
-                selected = set(chart_ids)
-                body["chart_specs"] = [chart for chart in body.get("chart_specs", []) if chart.get("chart_id") in selected]
-                body["chart_count"] = len(body["chart_specs"])
+            filter_report_chart_specs(body, chart_ids)
+            filter_report_kpi_cards(body, kpi_ids)
             body["export_package"] = package
             return Response(
                 json.dumps(body, indent=2),
@@ -67,6 +71,7 @@ def export_report(
             )
         if fmt == "pdf":
             body = build_report_payload(dataset_id)
+            filter_report_kpi_cards(body, kpi_ids)
             try:
                 from backend.services.pdf_export_service import build_executive_pdf
             except ImportError as exc:
@@ -78,6 +83,7 @@ def export_report(
             )
         if fmt in {"ppt", "pptx"}:
             body = build_report_payload(dataset_id)
+            filter_report_kpi_cards(body, kpi_ids)
             try:
                 from backend.services.ppt_export_service import build_executive_pptx
             except ImportError as exc:
@@ -89,12 +95,15 @@ def export_report(
             )
         if fmt in {"xlsx", "excel"}:
             body = build_report_payload(dataset_id)
+            filter_report_kpi_cards(body, kpi_ids)
+            summary = get_data_summary(dataset_id)
+            raw_df = load_dataset_dataframe(dataset_id)
             try:
                 from backend.services.excel_export_service import build_executive_excel
             except ImportError as exc:
                 raise ValueError("Excel export dependency is missing. Install openpyxl and retry.") from exc
             return Response(
-                build_executive_excel(body, chart_ids=chart_ids, package=package),
+                build_executive_excel(body, raw_df=raw_df, summary=summary, chart_ids=chart_ids, package=package),
                 media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 headers={"Content-Disposition": f"attachment; filename={dataset_id}_executive_report.xlsx"},
             )

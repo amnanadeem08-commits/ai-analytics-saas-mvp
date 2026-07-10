@@ -11,6 +11,13 @@ PLOTLY_CONFIG = {
 }
 
 
+def _safe_text(value: object, fallback: str) -> str:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"undefined", "none", "null", "nan"}:
+        return fallback
+    return text
+
+
 def _chart_key(chart: dict, index: int) -> str:
     return f"chart_{index}_{chart.get('chart_id') or chart.get('title', 'visual')}"
 
@@ -36,9 +43,10 @@ def _prepare_figure(chart: dict) -> go.Figure | None:
 
 def _render_chart_header(chart: dict) -> None:
     metadata = chart.get("metadata", {})
-    title = chart.get("title", "Chart")
-    chart_type = chart.get("chart_type", "chart").replace("_", " ").title()
-    subtitle = metadata.get("subtitle", "")
+    raw_chart_type = _safe_text(chart.get("chart_type"), "chart")
+    title = _safe_text(chart.get("title"), "Chart")
+    chart_type = raw_chart_type.replace("_", " ").title()
+    subtitle = _safe_text(metadata.get("subtitle"), "")
     st.markdown(
         f"""
         <div class="chart-card-header">
@@ -81,9 +89,9 @@ def inject_chart_styles() -> None:
         .chart-card-pill {
             font-size: 0.68rem;
             font-weight: 700;
-            color: #2563EB;
-            background: rgba(37, 99, 235, 0.08);
-            border: 1px solid rgba(37, 99, 235, 0.18);
+            color: var(--brand-primary);
+            background: color-mix(in srgb, var(--brand-primary) 8%, transparent);
+            border: 1px solid var(--brand-primary);
             border-radius: 999px;
             padding: 4px 9px;
             white-space: nowrap;
@@ -123,7 +131,12 @@ def render_time_trends(dashboard: dict) -> None:
         st.line_chart(trend_df.set_index("period"))
 
 
-def render_plotly_chart_specs(dashboard: dict) -> None:
+def render_plotly_chart_specs(
+    dashboard: dict,
+    *,
+    on_add_to_storyboard=None,
+    on_add_to_report=None,
+) -> None:
     chart_specs = dashboard.get("chart_specs", [])
     if not chart_specs:
         st.info("No chart-ready column combinations were detected. Add numeric, categorical, or date fields to generate visuals.")
@@ -144,4 +157,12 @@ def render_plotly_chart_specs(dashboard: dict) -> None:
                 if metadata.get("metric_suitability"):
                     suitability = metadata["metric_suitability"]
                     st.caption(f"Metric rule: {suitability.get('reason', '')}")
-
+                if metadata.get("statistical_explanation"):
+                    st.caption(metadata["statistical_explanation"])
+                actions = st.columns([1, 1])
+                if actions[0].button("➕ Storyboard", key=f"dashboard_chart_story_{chart.get('chart_id')}", use_container_width=True):
+                    if callable(on_add_to_storyboard):
+                        on_add_to_storyboard(chart)
+                if actions[1].button("📌 Report", key=f"dashboard_chart_report_{chart.get('chart_id')}", use_container_width=True):
+                    if callable(on_add_to_report):
+                        on_add_to_report(chart)

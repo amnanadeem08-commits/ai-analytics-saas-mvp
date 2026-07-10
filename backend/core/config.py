@@ -6,8 +6,8 @@ class Settings:
     """Central application settings for local-first MVP."""
 
     APP_NAME: str = os.getenv("APP_NAME", "AI Analytics SaaS MVP")
-    API_VERSION: str = "0.1.0"
-    MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "25"))
+    API_VERSION: str = os.getenv("API_VERSION", "1.0.0")
+    MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "200"))
 
     ROOT_DIR: Path = Path(__file__).resolve().parents[2]
     DATA_DIR: Path = ROOT_DIR / "data"
@@ -46,6 +46,7 @@ def ensure_data_directories() -> None:
         settings.BRAND_ASSETS_DIR,
         settings.RAG_INDEXES_DIR,
         settings.VECTOR_STORE_DIR,
+        settings.DATA_DIR / "storage",
     ]:
         directory.mkdir(parents=True, exist_ok=True)
 

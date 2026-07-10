@@ -7,6 +7,7 @@ import pandas as pd
 from backend.core.theme_manager import AnalyticsTheme, theme_manager
 from backend.processing.column_detector import detect_column_types
 from backend.services.metric_suitability_service import aggregate_label, metric_suitability
+from backend.services.statistical_explanation_service import build_chart_explanation
 from backend.utils.response_utils import to_json_safe
 
 
@@ -65,7 +66,16 @@ def _bar_for_category(df: pd.DataFrame, column: str, theme: AnalyticsTheme) -> d
         [column],
         [{"type": "bar", "x": labels, "y": values, "name": column, "marker": {"color": theme.palette[: len(labels)]}}],
         _layout(title, column, "Count", theme.name),
-        {"aggregation": "count", "subtitle": f"Top {len(labels)} values by record count."},
+        {
+            "aggregation": "count",
+            "subtitle": f"Top {len(labels)} values by record count.",
+            "statistical_explanation": build_chart_explanation(
+                chart_type="bar",
+                columns=[column],
+                sample_size=int(len(df)),
+                formula=f"frequency counts for {column}",
+            ),
+        },
         theme,
     )
 
@@ -92,7 +102,16 @@ def _pie_for_category(df: pd.DataFrame, column: str, theme: AnalyticsTheme) -> d
             }
         ],
         _layout(title, theme_name=theme.name),
-        {"aggregation": "share", "subtitle": f"Share of records by {column}."},
+        {
+            "aggregation": "share",
+            "subtitle": f"Share of records by {column}.",
+            "statistical_explanation": build_chart_explanation(
+                chart_type="pie",
+                columns=[column],
+                sample_size=int(len(df)),
+                formula=f"category share of {column}",
+            ),
+        },
         theme,
     )
 
@@ -115,7 +134,16 @@ def _histogram_for_numeric(df: pd.DataFrame, column: str, theme: AnalyticsTheme)
             }
         ],
         _layout(title, column, "Count", theme.name),
-        {"aggregation": "count", "subtitle": f"Distribution view for {column}; use this for spread, outliers, and shape."},
+        {
+            "aggregation": "count",
+            "subtitle": f"Distribution view for {column}; use this for spread, outliers, and shape.",
+            "statistical_explanation": build_chart_explanation(
+                chart_type="histogram",
+                columns=[column],
+                sample_size=int(series.count()),
+                formula=f"distribution bins of {column}",
+            ),
+        },
         theme,
     )
 
@@ -157,6 +185,12 @@ def _line_for_trend(df: pd.DataFrame, date_column: str, numeric_column: str, the
             "aggregation": f"monthly_{aggregation}",
             "subtitle": f"Monthly {aggregate_label(aggregation)} based on detected metric suitability.",
             "metric_suitability": suitability,
+            "statistical_explanation": build_chart_explanation(
+                chart_type="line",
+                columns=[date_column, numeric_column],
+                sample_size=int(len(trend_df)),
+                formula=f"monthly {aggregation} of {numeric_column}",
+            ),
         },
         theme,
     )
@@ -185,7 +219,16 @@ def _scatter_for_pair(df: pd.DataFrame, x_column: str, y_column: str, theme: Ana
             }
         ],
         _layout(title, x_column, y_column, theme.name),
-        {"sample_limit": 1000, "subtitle": f"Relationship view between {x_column} and {y_column}; sample capped at 1,000 rows."},
+        {
+            "sample_limit": 1000,
+            "subtitle": f"Relationship view between {x_column} and {y_column}; sample capped at 1,000 rows.",
+            "statistical_explanation": build_chart_explanation(
+                chart_type="scatter",
+                columns=[x_column, y_column],
+                sample_size=int(len(work)),
+                formula=f"paired values of {y_column} against {x_column}",
+            ),
+        },
         theme,
     )
 
@@ -222,9 +265,56 @@ def _heatmap_for_correlation(df: pd.DataFrame, numeric_columns: list[str], theme
             }
         ],
         _layout(title, theme_name=theme.name),
-        {"aggregation": "correlation", "subtitle": "Correlation strength across numeric fields; useful for relationship screening."},
+        {
+            "aggregation": "correlation",
+            "subtitle": "Correlation strength across numeric fields; useful for relationship screening.",
+            "statistical_explanation": build_chart_explanation(
+                chart_type="heatmap",
+                columns=selected,
+                sample_size=int(len(df)),
+                formula="pairwise Pearson correlations",
+            ),
+        },
         theme,
     )
+
+
+def _fallback_chart(df: pd.DataFrame, theme: AnalyticsTheme) -> dict[str, Any] | None:
+    categorical_candidates = [
+        column
+        for column in df.columns
+        if df[column].nunique(dropna=True) > 1 and not pd.api.types.is_numeric_dtype(df[column])
+    ]
+    numeric_candidates = [column for column in df.columns if pd.api.types.is_numeric_dtype(df[column])]
+
+    if categorical_candidates:
+        column = categorical_candidates[0]
+        return _bar_for_category(df, column, theme)
+
+    if numeric_candidates:
+        column = numeric_candidates[0]
+        return _histogram_for_numeric(df, column, theme)
+
+    labels = [str(column) for column in df.columns[:20]]
+    values = [int(df[column].notna().sum()) for column in df.columns[:20]]
+    if len(labels) >= 2:
+        title = "Column Completeness"
+        return _spec(
+            _chart_id("bar", "column_completeness"),
+            title,
+            "bar",
+            "comparisons",
+            labels,
+            [{"type": "bar", "x": labels, "y": values, "name": "Non-missing records", "marker": {"color": theme.palette[: len(labels)]}}],
+            _layout(title, "Column", "Non-missing records", theme.name),
+            {
+                "aggregation": "count",
+                "subtitle": "Fallback chart to keep the visual pipeline populated.",
+                "statistical_explanation": "This chart shows non-missing row counts per column when no richer chart pattern is available.",
+            },
+            theme,
+        )
+    return None
 
 
 def generate_chart_specs(df: pd.DataFrame, theme_name: str | None = None) -> list[dict[str, Any]]:
@@ -256,5 +346,10 @@ def generate_chart_specs(df: pd.DataFrame, theme_name: str | None = None) -> lis
         heatmap = _heatmap_for_correlation(df, numeric_columns, theme)
         if heatmap:
             charts.append(heatmap)
+
+    if not charts:
+        fallback = _fallback_chart(df, theme)
+        if fallback:
+            charts.append(fallback)
 
     return charts

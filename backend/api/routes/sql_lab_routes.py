@@ -1,7 +1,13 @@
 from fastapi import APIRouter
 
 from backend.api.deps import map_app_error
-from backend.models.sql_lab_models import NaturalLanguageSqlRequest, SavedSqlQueryRequest, SqlQueryRequest, SqlQueryResponse
+from backend.models.sql_lab_models import (
+    NaturalLanguageSqlRequest,
+    SavedSqlQueryRequest,
+    SqlQueryRequest,
+    SqlQueryResponse,
+    SqlTemplateResponse,
+)
 from backend.services.sql_lab_service import (
     detect_sql_errors,
     execute_sql,
@@ -16,7 +22,7 @@ from backend.services.sql_lab_service import (
 router = APIRouter(prefix="/sql-lab", tags=["SQL Lab"])
 
 
-@router.get("/{dataset_id}/templates")
+@router.get("/{dataset_id}/templates", response_model=SqlTemplateResponse)
 def templates(dataset_id: str):
     try:
         return {"templates": sql_templates(dataset_id)}

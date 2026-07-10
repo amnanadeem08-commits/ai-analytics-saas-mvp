@@ -23,3 +23,11 @@ data/branding/*
 *.job
 .DS_Store
 ~$*.pptx
+
+data/vector_store/
+data/rag_indexes/
+data/storage/
+data/*.db
+*.db
+output/
+tmp/

@@ -1,18 +1,10 @@
-from pydantic import BaseModel
 from fastapi import APIRouter
 
 from backend.api.deps import map_app_error
+from backend.models.dax_models import DaxFormula, DaxPrompt
 from backend.services.dax_service import dax_library, detect_dax_errors, explain_dax, generate_dax, optimize_dax, optimize_dataset_dax
 
 router = APIRouter(prefix="/dax", tags=["DAX Studio"])
-
-
-class DaxPrompt(BaseModel):
-    prompt: str
-
-
-class DaxFormula(BaseModel):
-    dax: str
 
 
 @router.get("/{dataset_id}/library")

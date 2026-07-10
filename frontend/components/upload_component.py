@@ -15,10 +15,9 @@ def render_upload(client: BackendClient) -> None:
         try:
             result = client.upload_csv(uploaded_file)
             st.success(result["message"])
-            st.code(result["dataset_id"])
+            st.caption(f"Dataset ID: {result['dataset_id']}")
             st.session_state["selected_dataset_id"] = result["dataset_id"]
-        except HTTPError as exc:
-            detail = exc.response.json().get("detail", str(exc)) if exc.response is not None else str(exc)
-            st.error(f"Upload failed: {detail}")
-        except RequestException as exc:
-            st.error(f"Could not connect to backend: {exc}")
+        except HTTPError:
+            st.error("Upload failed. Please check the file format and try again.")
+        except RequestException:
+            st.error("Backend upload is unavailable right now. Local upload is available from Dataset Preview.")

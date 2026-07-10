@@ -7,6 +7,7 @@ import pandas as pd
 from backend.core.theme_manager import theme_manager
 from backend.processing.column_detector import detect_column_types
 from backend.services.metric_suitability_service import aggregate_label, aggregate_series, metric_suitability, select_primary_metric
+from backend.services.statistical_explanation_service import build_kpi_explanation
 from backend.utils.response_utils import to_json_safe
 
 
@@ -37,6 +38,39 @@ def _is_financial_column(column: str) -> bool:
     return any(hint in lowered for hint in FINANCIAL_HINTS)
 
 
+def _unit_for_column(column: str) -> str:
+    lowered = column.lower().replace(" ", "_").replace("-", "_")
+    if lowered == "age" or lowered.endswith("_age"):
+        return "years"
+    if "daily_social_media_hours" in lowered:
+        return "h/day"
+    if "sleep" in lowered and "hour" in lowered:
+        return "h"
+    if "screen_time_before_sleep" in lowered:
+        return "h"
+    if "hour" in lowered or "duration" in lowered:
+        return "h"
+    return ""
+
+
+def _format_value_with_unit(value: Any, value_format: str = "number", unit: str = "") -> str:
+    if isinstance(value, (int, float)) and pd.notna(value):
+        if value_format == "percent":
+            formatted = f"{float(value):.1f}%"
+        elif value_format == "integer":
+            formatted = f"{int(round(float(value))):,}"
+        elif abs(float(value)) >= 1000:
+            formatted = f"{float(value):,.2f}".rstrip("0").rstrip(".")
+        else:
+            formatted = f"{float(value):.2f}".rstrip("0").rstrip(".")
+        return f"{formatted} {unit}".strip()
+    return str(value)
+
+
+def _apply_aggregation(series: pd.Series, aggregation: str) -> float:
+    return round(float(aggregate_series(series, aggregation)), 4)
+
+
 def _format_card(
     label: str,
     value: Any,
@@ -50,6 +84,8 @@ def _format_card(
     trend: str = "neutral",
     status: str = "neutral",
     business_context: str = "",
+    aggregation: str | None = None,
+    unit: str = "",
 ) -> dict[str, Any]:
     theme = theme_manager.get_theme()
     status_colors = {
@@ -68,11 +104,16 @@ def _format_card(
     }
     risk_indicator = "risk" if status in {"negative", "warning"} else "normal"
     confidence_score = 0.9 if previous_value is not None or category in {"dataset", "quality"} else 0.75
+    formatted_value = _format_value_with_unit(value, value_format, unit)
     return {
         "kpi_id": _kpi_id(label),
         "label": label,
         "value": to_json_safe(value),
+        "formatted_value": formatted_value,
+        "unit": unit,
         "format": value_format,
+        "aggregation": aggregation,
+        "aggregation_options": ["Auto", "Average", "Sum", "Median", "Min", "Max", "Count"],
         "category": category,
         "description": description,
         "current_value": to_json_safe(current_value if current_value is not None else value),
@@ -105,7 +146,7 @@ def _series_delta(series: pd.Series) -> tuple[float | None, float | None, float 
 
 
 def _series_delta_for_metric(series: pd.Series, aggregation: str) -> tuple[float | None, float | None, float | None, str, str]:
-    clean = pd.to_numeric(series, errors="coerce").dropna()
+    clean = series.dropna() if aggregation in {"count", "unique_count"} else pd.to_numeric(series, errors="coerce").dropna()
     if len(clean) < 2:
         return None, None, None, "neutral", "neutral"
     midpoint = max(len(clean) // 2, 1)
@@ -129,7 +170,16 @@ def _sparkline(series: pd.Series, buckets: int = 8, aggregation: str = "sum") ->
     ranked = clean.reset_index(drop=True)
     groups = pd.cut(ranked.index, bins=buckets, labels=False)
     grouped = ranked.groupby(groups)
-    values = (grouped.sum() if aggregation == "sum" else grouped.mean()).round(4).tolist()
+    if aggregation == "sum":
+        values = grouped.sum().round(4).tolist()
+    elif aggregation == "median":
+        values = grouped.median().round(4).tolist()
+    elif aggregation == "min":
+        values = grouped.min().round(4).tolist()
+    elif aggregation == "max":
+        values = grouped.max().round(4).tolist()
+    else:
+        values = grouped.mean().round(4).tolist()
     return [to_json_safe(float(value)) for value in values]
 
 
@@ -143,7 +193,18 @@ def _top_segment_context(
         return None
     dimension = categorical_columns[0]
     groupby = df.groupby(dimension, dropna=False)[metric_column]
-    grouped = (groupby.sum() if aggregation == "sum" else groupby.mean()).sort_values(ascending=False)
+    if aggregation == "sum":
+        grouped = groupby.sum().sort_values(ascending=False)
+    elif aggregation == "median":
+        grouped = groupby.median().sort_values(ascending=False)
+    elif aggregation == "min":
+        grouped = groupby.min().sort_values(ascending=False)
+    elif aggregation == "max":
+        grouped = groupby.max().sort_values(ascending=False)
+    elif aggregation == "count":
+        grouped = groupby.count().sort_values(ascending=False)
+    else:
+        grouped = groupby.mean().sort_values(ascending=False)
     if grouped.empty:
         return None
     top_value = float(grouped.iloc[0])
@@ -187,82 +248,105 @@ def compute_kpi_cards(df: pd.DataFrame) -> list[dict[str, Any]]:
             business_context="Share of populated cells after cleaning.",
         ),
     ]
+    cards[0]["statistical_explanation"] = build_kpi_explanation(
+        label="Total rows",
+        formula="a count of records",
+        sample_size=int(len(df)),
+    )
+    cards[1]["statistical_explanation"] = build_kpi_explanation(
+        label="Total columns",
+        formula="a count of variables",
+        sample_size=int(len(df.columns)),
+    )
+    cards[2]["statistical_explanation"] = build_kpi_explanation(
+        label="Data completeness",
+        formula="non-missing cells ÷ total cells",
+        sample_size=int(total_cells),
+        is_rate=True,
+    )
 
     metric_candidates = [
         column for column in numeric_columns if metric_suitability(column, df[column])["is_valid_metric"]
     ]
     financial_columns = [col for col in metric_candidates if _is_financial_column(col)]
-    metric_columns = financial_columns or metric_candidates[:3]
+    nonfinancial_columns = [col for col in metric_candidates if col not in financial_columns]
+    metric_columns = (financial_columns + nonfinancial_columns)[:4]
 
     for column in metric_columns[:4]:
+        raw_series = df[column].dropna()
         series = pd.to_numeric(df[column], errors="coerce").dropna()
-        if series.empty:
+        suitability = metric_suitability(column, raw_series)
+        aggregation = suitability["recommended_aggregation"]
+        if aggregation not in {"count", "unique_count"} and series.empty:
             continue
         pretty = _pretty_name(column)
-        suitability = metric_suitability(column, series)
-        aggregation = suitability["recommended_aggregation"]
         aggregate_name = aggregate_label(aggregation)
-        total = round(float(series.sum()), 4)
-        average = round(float(series.mean()), 4)
-        primary_value = round(aggregate_series(series, aggregation), 4)
-        current, previous, delta, trend, status = _series_delta_for_metric(series, aggregation)
-        driver = _top_segment_context(df, column, categorical_columns, aggregation)
-        reason = (
-            f"{driver['segment']} contributes {driver['share_pct']}% of total {pretty} across {driver['dimension']}."
-            if driver and aggregation == "sum" and driver.get("share_pct") is not None
-            else f"{driver['segment']} has the highest average {pretty} across {driver['dimension']}."
-            if driver and aggregation == "average"
-            else f"{pretty} is calculated from {int(series.count())} usable numeric records."
-        )
+        unit = _unit_for_column(column)
+        value_format = "integer" if aggregation in {"count", "unique_count"} else "number"
+        total = round(float(series.sum()), 4) if not series.empty else None
+        average = round(float(series.mean()), 4) if not series.empty else None
+        primary_value = _apply_aggregation(raw_series if aggregation in {"count", "unique_count"} else series, aggregation)
+        current, previous, delta, trend, status = _series_delta_for_metric(raw_series if aggregation in {"count", "unique_count"} else series, aggregation)
+        driver = None if aggregation in {"unique_count"} else _top_segment_context(df, column, categorical_columns, aggregation)
+        if driver and aggregation == "sum" and driver.get("share_pct") is not None:
+            reason = f"{driver['segment']} contributes {driver['share_pct']}% of total {pretty} across {driver['dimension']}."
+        elif driver and aggregation == "average":
+            reason = f"{driver['segment']} has the highest average {pretty} across {driver['dimension']}."
+        elif aggregation == "unique_count":
+            reason = f"{pretty} is counted as {int(primary_value):,} unique non-empty values, not summed."
+        elif aggregation == "count":
+            reason = f"{pretty} is counted across {int(primary_value):,} non-empty records."
+        else:
+            reason = f"{pretty} is calculated from {int(series.count())} usable numeric records using {aggregate_name}."
         action = (
             f"Prioritize the drivers behind {driver['segment']} and compare them against weaker {driver['dimension']} segments."
             if driver
-            else f"Add a segment field to explain what is driving {pretty}."
+            else f"Review segments or filters to explain what is driving {pretty}."
         )
+        display_aggregate_name = "Avg" if aggregation == "average" else aggregate_name.title()
+        label = f"{display_aggregate_name} {pretty}"
         cards.append(
             _format_card(
-                f"{aggregate_name.title()} {pretty}",
+                label,
                 primary_value,
                 category="business",
+                value_format=value_format,
                 current_value=current,
                 previous_value=previous,
                 delta_percentage=delta,
                 trend=trend,
                 status=status,
-                business_context=f"{aggregate_name.title()} {pretty}; selected because {suitability['reason']}",
+                business_context=f"{label}; selected because {suitability['reason']}",
                 description=reason,
+                aggregation=aggregation,
+                unit=unit,
             )
         )
-        cards[-1]["sparkline"] = _sparkline(series, aggregation=aggregation)
+        cards[-1]["sparkline"] = [] if aggregation in {"count", "unique_count"} else _sparkline(series, aggregation=aggregation)
         cards[-1]["reason"] = reason
         cards[-1]["recommended_action"] = action
-        cards[-1]["expected_impact"] = _impact_from_delta(delta)
+        cards[-1]["expected_impact"] = _impact_from_delta(delta) if delta is not None else "No benchmark or prior comparison is available for directional impact."
         cards[-1]["metric_suitability"] = suitability
         cards[-1]["data_confidence"] = cards[-1]["confidence_score"]
         cards[-1]["business_confidence"] = suitability["business_confidence"]
         cards[-1]["business_relevance"] = suitability["business_relevance"]
         cards[-1]["evidence"] = {
-            "records": int(series.count()),
+            "records": int(raw_series.count()),
             "current_period": to_json_safe(round(current, 4)) if current is not None else None,
             "previous_period": to_json_safe(round(previous, 4)) if previous is not None else None,
             "top_segment": driver,
             "aggregation": aggregation,
             "total": to_json_safe(total),
             "average": to_json_safe(average),
+            "unit": unit,
         }
-        cards.append(
-            _format_card(
-                f"Average {pretty}",
-                average,
-                category="business",
-                business_context=f"Average value across usable {pretty} records.",
-            )
+        cards[-1]["statistical_explanation"] = build_kpi_explanation(
+            label=label,
+            formula=f"{aggregate_name} of {pretty}",
+            sample_size=int(raw_series.count()),
+            is_rate=cards[-1]["format"] == "percent",
+            series=series if not series.empty else None,
         )
-        cards[-1]["sparkline"] = _sparkline(series, aggregation="average")
-        cards[-1]["reason"] = f"Average {pretty} is based on {int(series.count())} non-empty records."
-        cards[-1]["recommended_action"] = f"Monitor outliers and segment-level variance before using average {pretty} for targets."
-        cards[-1]["expected_impact"] = "Better segment targeting can improve planning accuracy and reduce blended-average bias."
-        cards[-1]["evidence"] = {"records": int(series.count()), "min": to_json_safe(series.min()), "max": to_json_safe(series.max())}
 
     for column in categorical_columns[:2]:
         counts = df[column].value_counts(dropna=True)
@@ -284,6 +368,11 @@ def compute_kpi_cards(df: pd.DataFrame) -> list[dict[str, Any]]:
         cards[-1]["recommended_action"] = f"Use {top_value} as the baseline segment for comparison."
         cards[-1]["expected_impact"] = "Segment baselines help leadership focus follow-up analysis on meaningful differences."
         cards[-1]["evidence"] = {"segment": top_value, "records": int(counts.iloc[0])}
+        cards[-1]["statistical_explanation"] = build_kpi_explanation(
+            label=f"Top {_pretty_name(column)}",
+            formula=f"mode of {column}",
+            sample_size=int(counts.sum()),
+        )
 
     return cards[:10]
 
@@ -301,7 +390,18 @@ def compute_business_metrics(df: pd.DataFrame) -> dict[str, Any]:
     if primary_metric and primary_segment:
         aggregation = suitability["recommended_aggregation"] if suitability else "sum"
         groupby = df.groupby(primary_segment)[primary_metric]
-        grouped = (groupby.sum(numeric_only=True) if aggregation == "sum" else groupby.mean(numeric_only=True)).sort_values(ascending=False).head(1)
+        if aggregation == "sum":
+            grouped = groupby.sum(numeric_only=True).sort_values(ascending=False).head(1)
+        elif aggregation == "median":
+            grouped = groupby.median(numeric_only=True).sort_values(ascending=False).head(1)
+        elif aggregation == "min":
+            grouped = groupby.min(numeric_only=True).sort_values(ascending=False).head(1)
+        elif aggregation == "max":
+            grouped = groupby.max(numeric_only=True).sort_values(ascending=False).head(1)
+        elif aggregation == "count":
+            grouped = groupby.count().sort_values(ascending=False).head(1)
+        else:
+            grouped = groupby.mean(numeric_only=True).sort_values(ascending=False).head(1)
         if not grouped.empty:
             segment_leader = {
                 "dimension": primary_segment,

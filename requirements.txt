@@ -5,11 +5,15 @@ pandas==2.2.3
 streamlit==1.40.2
 requests==2.32.3
 pydantic==2.10.3
+SQLAlchemy==2.0.50
+alembic==1.14.0
+# Optional: enables the Redis queue/store backend (QUEUE_BACKEND=redis).
+# The system falls back to the in-memory backend when redis is unavailable.
+redis==5.2.1
 plotly==6.8.0
 openpyxl==3.1.5
 reportlab==4.4.5
 python-pptx==1.0.2
 Pillow==11.3.0
 kaleido==1.2.0
-chromadb
-sentence-transformers
+matplotlib==3.10.3

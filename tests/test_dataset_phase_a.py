@@ -1,17 +1,20 @@
 from pathlib import Path
 from io import BytesIO
+import logging
+import re
 import shutil
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from backend.core.config import ensure_data_directories, settings
 from backend.core.theme_manager import theme_manager
 from backend.main import app
+from frontend.components.storyboard_session import add_storyboard_entry
 
 
-def test_upload_persists_dataset_record_and_status(monkeypatch):
+def test_upload_persists_dataset_record_and_status(monkeypatch, caplog):
     test_root = Path("data") / "test_runs" / uuid4().hex
     monkeypatch.setattr(settings, "DATA_DIR", test_root)
     monkeypatch.setattr(settings, "UPLOADS_DIR", test_root / "uploads")
@@ -194,14 +197,126 @@ def test_upload_persists_dataset_record_and_status(monkeypatch):
         assert visual_body["applied_spec"]["number_format"] == "Currency"
         assert visual_body["chart"]["metadata"]["short_ai_insight"]
 
+        register_visual = client.post(
+            f"/visual-builder/{dataset_id}/register",
+            json=visual_body["chart"],
+        )
+        assert register_visual.status_code == 200
+        register_visual_body = register_visual.json()
+        assert register_visual_body["registered"] is True
+        assert register_visual_body["chart"]["chart_id"] == visual_body["chart"]["chart_id"]
+
+        register_visual_duplicate = client.post(
+            f"/visual-builder/{dataset_id}/register",
+            json=visual_body["chart"],
+        )
+        assert register_visual_duplicate.status_code == 200
+        assert register_visual_duplicate.json()["registered"] is False
+
+        bar_visual = client.post(
+            f"/visual-builder/{dataset_id}/render",
+            json={
+                "chart_type": "bar",
+                "dimension": "region",
+                "measure": "sales",
+                "aggregation": "sum",
+                "sort": "descending",
+                "data_labels": True,
+            },
+        )
+        assert bar_visual.status_code == 200
+        bar_visual_body = bar_visual.json()
+        assert bar_visual_body["chart"]["chart_type"] == "bar"
+        assert bar_visual_body["chart"]["plotly"]["data"]
+
+        register_bar_visual = client.post(
+            f"/visual-builder/{dataset_id}/register",
+            json=bar_visual_body["chart"],
+        )
+        assert register_bar_visual.status_code == 200
+        assert register_bar_visual.json()["registered"] is True
+
+        table_visual = client.post(
+            f"/visual-builder/{dataset_id}/render",
+            json={
+                "chart_type": "table",
+                "dimension": "region",
+                "measure": "sales",
+                "aggregation": "sum",
+                "sort": "descending",
+                "data_labels": True,
+            },
+        )
+        assert table_visual.status_code == 200
+        table_visual_body = table_visual.json()
+        assert table_visual_body["chart"]["chart_type"] == "table"
+        assert table_visual_body["chart"]["plotly"]["data"]
+
+        register_table_visual = client.post(
+            f"/visual-builder/{dataset_id}/register",
+            json=table_visual_body["chart"],
+        )
+        assert register_table_visual.status_code == 200
+        assert register_table_visual.json()["registered"] is True
+
+        studio_chart_ids = [
+            visual_body["chart"]["chart_id"],
+            bar_visual_body["chart"]["chart_id"],
+            table_visual_body["chart"]["chart_id"],
+        ]
+        fallback_text = b"Chart image could not be rendered"
+        image_marker = b"/Subtype /Image"
+
+        def _assert_pdf_export_for_chart_ids(chart_ids: list[str], minimum_bytes: int) -> bytes:
+            caplog.clear()
+            caplog.set_level(logging.ERROR, logger="backend.services.export_render_service")
+            export_response = client.get(
+                f"/report/{dataset_id}/export",
+                params=[("format", "pdf"), ("package", "board")] + [("chart_ids", chart_id) for chart_id in chart_ids],
+            )
+            assert export_response.status_code == 200, (
+                f"Studio PDF export did not return HTTP 200 for chart_ids={chart_ids}.\n"
+                f"render exceptions:\n{caplog.text or 'No export_render_service exceptions captured.'}"
+            )
+            assert export_response.content.startswith(b"%PDF")
+            assert len(export_response.content) > minimum_bytes, (
+                f"Studio PDF export appears too small for chart_ids={chart_ids}: {len(export_response.content)} bytes.\n"
+                f"render exceptions:\n{caplog.text or 'No export_render_service exceptions captured.'}"
+            )
+            assert fallback_text not in export_response.content, (
+                "Studio chart export hit fallback rendering in PDF.\n"
+                f"chart_ids={chart_ids}\n"
+                f"render exceptions:\n{caplog.text or 'No export_render_service exceptions captured.'}"
+            )
+            return export_response.content
+
+        studio_pdf_content = _assert_pdf_export_for_chart_ids(studio_chart_ids, minimum_bytes=12_000)
+        assert image_marker in studio_pdf_content, (
+            f"Expected at least one embedded chart image object for chart_ids={studio_chart_ids}.\n"
+            f"render exceptions:\n{caplog.text or 'No export_render_service exceptions captured.'}"
+        )
+
+        for chart_id in studio_chart_ids:
+            single_chart_pdf = _assert_pdf_export_for_chart_ids([chart_id], minimum_bytes=8_000)
+            assert image_marker in single_chart_pdf, (
+                f"Expected embedded image object for chart_id={chart_id}, but none was found.\n"
+                f"render exceptions:\n{caplog.text or 'No export_render_service exceptions captured.'}"
+            )
+
         report = client.get(f"/report/{dataset_id}")
         assert report.status_code == 200
-        assert report.json()["executive_summary"]["insight"]
-        assert report.json()["branding"]["report_title"] == "Executive Decision Intelligence Report"
-        assert report.json()["business_story"]["business_story"]
-        assert report.json()["analysis_guardrails"]["invalid_methods"]
-        assert report.json()["data_quality_score"]["grade"]
-        assert report.json()["suggested_questions"]
+        report_body = report.json()
+        assert report_body["executive_summary"]["insight"]
+        assert report_body["branding"]["report_title"] == "Executive Decision Intelligence Report"
+        assert report_body["business_story"]["business_story"]
+        assert report_body["analysis_guardrails"]["invalid_methods"]
+        assert report_body["data_quality_score"]["grade"]
+        assert report_body["suggested_questions"]
+        report_chart = next((chart for chart in report_body["chart_specs"] if chart["chart_id"] == visual_body["chart"]["chart_id"]), None)
+        assert report_chart is not None
+        assert report_chart["title"] == visual_body["chart"]["title"]
+        assert report_chart["chart_type"] == visual_body["chart"]["chart_type"]
+        assert len([chart for chart in report_body["chart_specs"] if chart["chart_id"] == visual_body["chart"]["chart_id"]]) == 1
 
         csv_export = client.get(f"/report/{dataset_id}/export", params={"format": "csv"})
         assert csv_export.status_code == 200
@@ -375,5 +490,410 @@ def test_upload_accepts_excel_workbook(monkeypatch):
         assert overview.status_code == 200
         assert overview.json()["row_count"] == 2
         assert overview.json()["column_groups"]["numeric"] == ["sales"]
+    finally:
+        shutil.rmtree(test_root, ignore_errors=True)
+
+
+def test_registering_two_distinct_studio_charts_keeps_both_in_report(monkeypatch):
+    test_root = Path("data") / "test_runs" / uuid4().hex
+    monkeypatch.setattr(settings, "DATA_DIR", test_root)
+    monkeypatch.setattr(settings, "UPLOADS_DIR", test_root / "uploads")
+    monkeypatch.setattr(settings, "PROCESSED_DIR", test_root / "processed")
+    monkeypatch.setattr(settings, "METADATA_DIR", test_root / "metadata")
+    monkeypatch.setattr(settings, "DATASETS_DIR", test_root / "datasets")
+    monkeypatch.setattr(settings, "SAMPLES_DIR", test_root / "samples")
+    monkeypatch.setattr(settings, "BRAND_ASSETS_DIR", test_root / "branding")
+    monkeypatch.setattr(settings, "DATASETS_METADATA_FILE", test_root / "metadata" / "datasets.json")
+    monkeypatch.setattr(settings, "BRANDING_FILE", test_root / "metadata" / "branding.json")
+    monkeypatch.setattr(settings, "SQL_QUERIES_FILE", test_root / "metadata" / "sql_queries.json")
+    monkeypatch.setattr(settings, "THEME_STATE_FILE", test_root / "metadata" / "theme_state.json")
+    ensure_data_directories()
+    theme_manager.set_active("power_bi_professional")
+
+    try:
+        client = TestClient(app)
+        upload = client.post(
+            "/upload",
+            files={
+                "file": (
+                    "sales_multi.csv",
+                    b"region,segment,sales,profit\nNorth,Consumer,100,25\nSouth,Corporate,150,40\nEast,Consumer,90,20\n",
+                    "text/csv",
+                )
+            },
+        )
+        assert upload.status_code == 200
+        dataset_id = upload.json()["dataset_id"]
+
+        first_visual = client.post(
+            f"/visual-builder/{dataset_id}/render",
+            json={
+                "chart_type": "horizontal_bar",
+                "dimension": "region",
+                "measure": "sales",
+                "aggregation": "sum",
+                "sort": "descending",
+                "title": "Sales by Region",
+                "data_labels": True,
+            },
+        )
+        assert first_visual.status_code == 200
+        first_chart = first_visual.json()["chart"]
+
+        second_visual = client.post(
+            f"/visual-builder/{dataset_id}/render",
+            json={
+                "chart_type": "bar",
+                "dimension": "segment",
+                "measure": "profit",
+                "aggregation": "sum",
+                "sort": "descending",
+                "title": "Profit by Segment",
+                "data_labels": True,
+            },
+        )
+        assert second_visual.status_code == 200
+        second_chart = second_visual.json()["chart"]
+
+        assert first_chart["chart_id"] != second_chart["chart_id"]
+
+        first_register = client.post(f"/visual-builder/{dataset_id}/register", json=first_chart)
+        second_register = client.post(f"/visual-builder/{dataset_id}/register", json=second_chart)
+        assert first_register.status_code == 200
+        assert second_register.status_code == 200
+        assert first_register.json()["registered"] is True
+        assert second_register.json()["registered"] is True
+
+        report = client.get(f"/report/{dataset_id}")
+        assert report.status_code == 200
+        report_body = report.json()
+        chart_specs = report_body["chart_specs"]
+
+        report_first = next((chart for chart in chart_specs if chart["chart_id"] == first_chart["chart_id"]), None)
+        report_second = next((chart for chart in chart_specs if chart["chart_id"] == second_chart["chart_id"]), None)
+        assert report_first is not None
+        assert report_second is not None
+        assert report_first["title"] == "Sales by Region"
+        assert report_first["chart_type"] == "horizontal_bar"
+        assert report_second["title"] == "Profit by Segment"
+        assert report_second["chart_type"] == "bar"
+        assert len([chart for chart in chart_specs if chart["chart_id"] == first_chart["chart_id"]]) == 1
+        assert len([chart for chart in chart_specs if chart["chart_id"] == second_chart["chart_id"]]) == 1
+    finally:
+        shutil.rmtree(test_root, ignore_errors=True)
+
+
+def test_registering_bar_horizontal_and_table_studio_charts_exports_without_pdf_fallback(monkeypatch):
+    test_root = Path("data") / "test_runs" / uuid4().hex
+    monkeypatch.setattr(settings, "DATA_DIR", test_root)
+    monkeypatch.setattr(settings, "UPLOADS_DIR", test_root / "uploads")
+    monkeypatch.setattr(settings, "PROCESSED_DIR", test_root / "processed")
+    monkeypatch.setattr(settings, "METADATA_DIR", test_root / "metadata")
+    monkeypatch.setattr(settings, "DATASETS_DIR", test_root / "datasets")
+    monkeypatch.setattr(settings, "SAMPLES_DIR", test_root / "samples")
+    monkeypatch.setattr(settings, "BRAND_ASSETS_DIR", test_root / "branding")
+    monkeypatch.setattr(settings, "DATASETS_METADATA_FILE", test_root / "metadata" / "datasets.json")
+    monkeypatch.setattr(settings, "BRANDING_FILE", test_root / "metadata" / "branding.json")
+    monkeypatch.setattr(settings, "SQL_QUERIES_FILE", test_root / "metadata" / "sql_queries.json")
+    monkeypatch.setattr(settings, "THEME_STATE_FILE", test_root / "metadata" / "theme_state.json")
+    ensure_data_directories()
+    theme_manager.set_active("power_bi_professional")
+
+    try:
+        client = TestClient(app)
+        upload = client.post(
+            "/upload",
+            files={
+                "file": (
+                    "studio_three_types.csv",
+                    b"region,segment,sales,profit\nNorth,Consumer,100,25\nSouth,Corporate,150,40\nEast,Consumer,90,20\n",
+                    "text/csv",
+                )
+            },
+        )
+        assert upload.status_code == 200
+        dataset_id = upload.json()["dataset_id"]
+
+        chart_requests = [
+            {
+                "chart_type": "bar",
+                "dimension": "region",
+                "measure": "sales",
+                "aggregation": "sum",
+                "sort": "descending",
+                "title": "Studio Bar by Region",
+                "data_labels": True,
+            },
+            {
+                "chart_type": "horizontal_bar",
+                "dimension": "segment",
+                "measure": "sales",
+                "aggregation": "sum",
+                "sort": "descending",
+                "title": "Studio Horizontal Bar by Segment",
+                "data_labels": True,
+            },
+            {
+                "chart_type": "table",
+                "dimension": "segment",
+                "measure": "profit",
+                "aggregation": "sum",
+                "sort": "descending",
+                "title": "Studio Table by Segment",
+                "data_labels": True,
+            },
+        ]
+
+        created_charts: list[dict] = []
+        for request in chart_requests:
+            render_response = client.post(f"/visual-builder/{dataset_id}/render", json=request)
+            assert render_response.status_code == 200
+            chart = render_response.json()["chart"]
+            register_response = client.post(f"/visual-builder/{dataset_id}/register", json=chart)
+            assert register_response.status_code == 200
+            created_charts.append(
+                {
+                    "chart_id": chart["chart_id"],
+                    "title": chart["title"],
+                    "chart_type": chart["chart_type"],
+                }
+            )
+
+        report = client.get(f"/report/{dataset_id}")
+        assert report.status_code == 200
+        report_charts = report.json()["chart_specs"]
+        for expected in created_charts:
+            matched = next((chart for chart in report_charts if chart["chart_id"] == expected["chart_id"]), None)
+            assert matched is not None
+            assert matched["title"] == expected["title"]
+            assert matched["chart_type"] == expected["chart_type"]
+
+        pdf_export = client.get(
+            f"/report/{dataset_id}/export",
+            params=[("format", "pdf"), ("package", "board")] + [("chart_ids", chart["chart_id"]) for chart in created_charts],
+        )
+        assert pdf_export.status_code == 200
+        assert pdf_export.content.startswith(b"%PDF")
+        assert b"Chart image could not be rendered" not in pdf_export.content
+    finally:
+        shutil.rmtree(test_root, ignore_errors=True)
+
+
+def test_studio_storyboard_add_assigns_order_and_prevents_duplicate(monkeypatch):
+    test_root = Path("data") / "test_runs" / uuid4().hex
+    monkeypatch.setattr(settings, "DATA_DIR", test_root)
+    monkeypatch.setattr(settings, "UPLOADS_DIR", test_root / "uploads")
+    monkeypatch.setattr(settings, "PROCESSED_DIR", test_root / "processed")
+    monkeypatch.setattr(settings, "METADATA_DIR", test_root / "metadata")
+    monkeypatch.setattr(settings, "DATASETS_DIR", test_root / "datasets")
+    monkeypatch.setattr(settings, "SAMPLES_DIR", test_root / "samples")
+    monkeypatch.setattr(settings, "BRAND_ASSETS_DIR", test_root / "branding")
+    monkeypatch.setattr(settings, "DATASETS_METADATA_FILE", test_root / "metadata" / "datasets.json")
+    monkeypatch.setattr(settings, "BRANDING_FILE", test_root / "metadata" / "branding.json")
+    monkeypatch.setattr(settings, "SQL_QUERIES_FILE", test_root / "metadata" / "sql_queries.json")
+    monkeypatch.setattr(settings, "THEME_STATE_FILE", test_root / "metadata" / "theme_state.json")
+    ensure_data_directories()
+    theme_manager.set_active("power_bi_professional")
+
+    try:
+        client = TestClient(app)
+        upload = client.post(
+            "/upload",
+            files={
+                "file": (
+                    "storyboard_chart.csv",
+                    b"region,sales\nNorth,100\nSouth,150\n",
+                    "text/csv",
+                )
+            },
+        )
+        assert upload.status_code == 200
+        dataset_id = upload.json()["dataset_id"]
+
+        visual = client.post(
+            f"/visual-builder/{dataset_id}/render",
+            json={
+                "chart_type": "horizontal_bar",
+                "dimension": "region",
+                "measure": "sales",
+                "aggregation": "sum",
+                "sort": "descending",
+                "title": "Storyboard Sales by Region",
+                "data_labels": True,
+            },
+        )
+        assert visual.status_code == 200
+        visual_body = visual.json()
+        chart = visual_body["chart"]
+        applied_spec = visual_body["applied_spec"]
+
+        register = client.post(f"/visual-builder/{dataset_id}/register", json=chart)
+        assert register.status_code == 200
+        assert register.json()["chart"]["chart_id"] == chart["chart_id"]
+
+        storyboard: list[dict] = []
+        storyboard_entry = {
+            "chart_id": chart["chart_id"],
+            "title": chart["title"],
+            "business_meaning": chart.get("metadata", {}).get("short_ai_insight", ""),
+            "suggested_chart_type": applied_spec.get("chart_type", ""),
+            "fields_used": chart.get("fields", []),
+            "spec": applied_spec,
+            "short_ai_insight": chart.get("metadata", {}).get("short_ai_insight", ""),
+        }
+
+        first_add = add_storyboard_entry(storyboard, storyboard_entry)
+        assert first_add["added"] is True
+        assert len(storyboard) == 1
+        assert storyboard[0]["chart_id"] == chart["chart_id"]
+        assert storyboard[0]["sequence"] == 1
+        assert storyboard[0]["order"] == 1
+
+        second_add = add_storyboard_entry(storyboard, storyboard_entry)
+        assert second_add["added"] is False
+        assert len(storyboard) == 1
+        # Current behavior: duplicate adds return existing entry and do not update order/sequence.
+        assert storyboard[0]["sequence"] == 1
+        assert storyboard[0]["order"] == 1
+    finally:
+        shutil.rmtree(test_root, ignore_errors=True)
+
+
+def test_data_cleaning_endpoint_produces_non_destructive_downloads(monkeypatch):
+    test_root = Path("data") / "test_runs" / uuid4().hex
+    monkeypatch.setattr(settings, "DATA_DIR", test_root)
+    monkeypatch.setattr(settings, "UPLOADS_DIR", test_root / "uploads")
+    monkeypatch.setattr(settings, "PROCESSED_DIR", test_root / "processed")
+    monkeypatch.setattr(settings, "METADATA_DIR", test_root / "metadata")
+    monkeypatch.setattr(settings, "DATASETS_DIR", test_root / "datasets")
+    monkeypatch.setattr(settings, "SAMPLES_DIR", test_root / "samples")
+    monkeypatch.setattr(settings, "BRAND_ASSETS_DIR", test_root / "branding")
+    monkeypatch.setattr(settings, "DATASETS_METADATA_FILE", test_root / "metadata" / "datasets.json")
+    monkeypatch.setattr(settings, "BRANDING_FILE", test_root / "metadata" / "branding.json")
+    monkeypatch.setattr(settings, "SQL_QUERIES_FILE", test_root / "metadata" / "sql_queries.json")
+    monkeypatch.setattr(settings, "THEME_STATE_FILE", test_root / "metadata" / "theme_state.json")
+    ensure_data_directories()
+
+    try:
+        client = TestClient(app)
+        upload = client.post(
+            "/upload",
+            files={"file": ("dirty.csv", b"region,sales,date\n North ,100,2024-01-01\nNorth,,2024-01-02\nnorth,5000,\n", "text/csv")},
+        )
+        assert upload.status_code == 200
+        dataset_id = upload.json()["dataset_id"]
+
+        clean = client.post(
+            f"/datasets/{dataset_id}/clean",
+            json={
+                "normalize_casing": "lower",
+                "numeric_missing_strategy": "median",
+                "categorical_missing_strategy": "mode",
+                "datetime_missing_strategy": "manual",
+                "outlier_strategy": "cap",
+                "outlier_method": "iqr",
+            },
+        )
+        assert clean.status_code == 200
+        body = clean.json()
+        assert body["rows_after"] <= body["rows_before"]
+        assert body["completeness_after_pct"] >= body["completeness_before_pct"]
+        assert body["cleaned_filename_csv"].endswith(".csv")
+        assert body["cleaned_filename_xlsx"].endswith(".xlsx")
+
+        csv_download = client.get(f"/datasets/{dataset_id}/clean/download", params={"filename": body["cleaned_filename_csv"]})
+        xlsx_download = client.get(f"/datasets/{dataset_id}/clean/download", params={"filename": body["cleaned_filename_xlsx"]})
+        assert csv_download.status_code == 200
+        assert xlsx_download.status_code == 200
+        assert b"region,sales,date" in csv_download.content
+        assert xlsx_download.content.startswith(b"PK")
+    finally:
+        shutil.rmtree(test_root, ignore_errors=True)
+
+
+def test_excel_export_contains_dashboard_summary_raw_data_schema_and_chart_object(monkeypatch):
+    test_root = Path("data") / "test_runs" / uuid4().hex
+    monkeypatch.setattr(settings, "DATA_DIR", test_root)
+    monkeypatch.setattr(settings, "UPLOADS_DIR", test_root / "uploads")
+    monkeypatch.setattr(settings, "PROCESSED_DIR", test_root / "processed")
+    monkeypatch.setattr(settings, "METADATA_DIR", test_root / "metadata")
+    monkeypatch.setattr(settings, "DATASETS_DIR", test_root / "datasets")
+    monkeypatch.setattr(settings, "SAMPLES_DIR", test_root / "samples")
+    monkeypatch.setattr(settings, "BRAND_ASSETS_DIR", test_root / "branding")
+    monkeypatch.setattr(settings, "DATASETS_METADATA_FILE", test_root / "metadata" / "datasets.json")
+    monkeypatch.setattr(settings, "BRANDING_FILE", test_root / "metadata" / "branding.json")
+    monkeypatch.setattr(settings, "SQL_QUERIES_FILE", test_root / "metadata" / "sql_queries.json")
+    monkeypatch.setattr(settings, "THEME_STATE_FILE", test_root / "metadata" / "theme_state.json")
+    ensure_data_directories()
+    theme_manager.set_active("power_bi_professional")
+
+    try:
+        client = TestClient(app)
+        upload = client.post(
+            "/upload",
+            files={"file": ("sales_chart.csv", b"region,sales\nNorth,100\nSouth,150\nEast,90\n", "text/csv")},
+        )
+        assert upload.status_code == 200
+        dataset_id = upload.json()["dataset_id"]
+        xlsx_export = client.get(f"/report/{dataset_id}/export", params={"format": "xlsx"})
+        assert xlsx_export.status_code == 200
+        workbook = load_workbook(BytesIO(xlsx_export.content))
+        assert "Dashboard Summary" in workbook.sheetnames
+        assert "Visual Dashboard" in workbook.sheetnames
+        assert "Raw Data" in workbook.sheetnames
+        assert "Column Schema" in workbook.sheetnames
+        summary_sheet = workbook["Dashboard Summary"]
+        assert summary_sheet["A7"].value is not None
+        total_charts = sum(len(workbook[sheet]._charts) for sheet in workbook.sheetnames)
+        assert total_charts >= 1
+    finally:
+        shutil.rmtree(test_root, ignore_errors=True)
+
+
+def test_regional_insurance_defaults_to_average_charges_with_business_aware_labels(monkeypatch):
+    test_root = Path("data") / "test_runs" / uuid4().hex
+    monkeypatch.setattr(settings, "DATA_DIR", test_root)
+    monkeypatch.setattr(settings, "UPLOADS_DIR", test_root / "uploads")
+    monkeypatch.setattr(settings, "PROCESSED_DIR", test_root / "processed")
+    monkeypatch.setattr(settings, "METADATA_DIR", test_root / "metadata")
+    monkeypatch.setattr(settings, "DATASETS_DIR", test_root / "datasets")
+    monkeypatch.setattr(settings, "SAMPLES_DIR", test_root / "samples")
+    monkeypatch.setattr(settings, "BRAND_ASSETS_DIR", test_root / "branding")
+    monkeypatch.setattr(settings, "DATASETS_METADATA_FILE", test_root / "metadata" / "datasets.json")
+    monkeypatch.setattr(settings, "BRANDING_FILE", test_root / "metadata" / "branding.json")
+    monkeypatch.setattr(settings, "SQL_QUERIES_FILE", test_root / "metadata" / "sql_queries.json")
+    monkeypatch.setattr(settings, "THEME_STATE_FILE", test_root / "metadata" / "theme_state.json")
+    ensure_data_directories()
+
+    csv = (
+        "age,bmi,children,charges,region\n"
+        "19,27.9,0,16884.92,southwest\n"
+        "32,33.0,1,4449.46,southeast\n"
+        "45,28.0,2,21984.47,southeast\n"
+        "50,29.5,1,11674.13,northeast\n"
+        "36,26.1,3,7250.55,northwest\n"
+    )
+    try:
+        client = TestClient(app)
+        upload = client.post("/upload", files={"file": ("insurance.csv", csv.encode("utf-8"), "text/csv")})
+        assert upload.status_code == 200
+        dataset_id = upload.json()["dataset_id"]
+
+        regional = client.get(f"/intelligence/{dataset_id}/regional")
+        assert regional.status_code == 200
+        body = regional.json()
+        assert body["dimension"] == "region"
+        assert body["metric"] == "charges"
+        assert body["aggregation"] == "average"
+        assert body["regional_title"] == "Average Charges by Region"
+        assert all(kpi["label"] in {"Highest Cost Region", "Lowest Cost Region", "Highest Risk Region"} for kpi in body["regional_kpis"])
+        assert re.search(r"\bage\b", body["regional_insights"][0]["insight"].lower()) is None
+        assert body["regional_kpis"][0]["region"] == body["regional_kpis"][2]["region"]
+
+        override = client.get(f"/intelligence/{dataset_id}/regional", params={"metric": "age", "aggregation": "median"})
+        assert override.status_code == 200
+        override_body = override.json()
+        assert override_body["metric"] == "age"
+        assert override_body["aggregation"] == "median"
     finally:
         shutil.rmtree(test_root, ignore_errors=True)

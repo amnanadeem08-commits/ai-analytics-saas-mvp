@@ -4,10 +4,10 @@ import streamlit as st
 
 
 SEVERITY_COLORS = {
-    "success": "#16A34A",
-    "warning": "#D97706",
-    "error": "#DC2626",
-    "info": "#2563EB",
+    "success": "var(--ui-success)",
+    "warning": "var(--ui-warning)",
+    "error": "var(--ui-danger)",
+    "info": "var(--ui-info)",
 }
 
 
@@ -32,6 +32,9 @@ def render_insight(insight: dict) -> None:
         """,
         unsafe_allow_html=True,
     )
+    # Raw JSON/metadata hidden behind collapsed expander — not visible by default
     if insight.get("metadata"):
-        with st.expander(f"Evidence: {title}", expanded=False):
-            st.json(insight["metadata"])
+        with st.expander("View technical evidence", expanded=False):
+            metadata = insight.get("metadata", {})
+            rows = [{"field": str(key).replace("_", " "), "value": value} for key, value in metadata.items()]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
