@@ -8,25 +8,25 @@ export function HowWeWork() {
 
   return (
     <section id="how-we-work" className="border-b border-white/10">
-      <div className="mx-auto max-w-site px-6 py-16 md:py-20">
+      <div className="mx-auto max-w-site px-6 py-16 md:py-24">
         <motion.div
           initial={reduceMotion ? false : { opacity: 0, y: 12 }}
           whileInView={{ opacity: 1, y: 0 }}
           viewport={{ once: true, amount: 0.35 }}
           transition={{ duration: 0.35 }}
         >
-          <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-signal">method</p>
+          <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-signal">Engagement</p>
           <h2 className="mt-3 font-display text-3xl font-semibold tracking-tightest text-paper md:text-4xl">
             {howWeWork.title}
           </h2>
-          <p className="mt-3 max-w-2xl text-muted">{howWeWork.lead}</p>
+          <p className="mt-4 max-w-2xl text-muted">{howWeWork.lead}</p>
         </motion.div>
 
-        <div className="mt-10 grid gap-6 md:grid-cols-2">
+        <div className="mt-12 grid gap-6 md:grid-cols-2">
           {howWeWork.items.map((item, index) => (
             <motion.article
               key={item.title}
-              className="rounded-xl border border-white/10 bg-panel p-6"
+              className="rounded-2xl border border-white/10 bg-panel p-6 md:p-8"
               initial={reduceMotion ? false : { opacity: 0, y: 12 }}
               whileInView={{ opacity: 1, y: 0 }}
               viewport={{ once: true, amount: 0.35 }}
