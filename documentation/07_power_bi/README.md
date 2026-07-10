@@ -1,5 +1,8 @@
 # 07 — Power BI Mapping
 
+**Start here for analysts:**  
+[Data Bot AI Explained Like a Power BI Project](DATA_BOT_AI_EXPLAINED_LIKE_POWER_BI.md) — full guide in analytics language (agents = analyst team, RAG = document search, workflows = refresh/ETL).
+
 | Data Bot AI capability | Power BI analogue | Notes |
 |------------------------|-------------------|-------|
 | Upload + profiling | Power Query / Data view | Local CSV/XLSX first |

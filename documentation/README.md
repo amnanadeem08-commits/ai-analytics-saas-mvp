@@ -33,9 +33,10 @@ This handbook is simultaneously:
 ## How to read this handbook
 
 1. Start with [01 Executive Summary](01_executive_summary/README.md)
-2. Study [02 Architecture](02_architecture/README.md)
-3. Drill into folders, workflows, API, frontend as needed
-4. Use Learning / Interview / Portfolio sections for career prep
+2. **Power BI / analytics readers:** [Data Bot AI Explained Like a Power BI Project](07_power_bi/DATA_BOT_AI_EXPLAINED_LIKE_POWER_BI.md)
+3. Study [02 Architecture](02_architecture/README.md)
+4. Drill into folders, workflows, API, frontend as needed
+5. Use Learning / Interview / Portfolio sections for career prep
 
 ## Documentation standards
 
