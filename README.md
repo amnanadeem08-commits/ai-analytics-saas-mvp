@@ -1,14 +1,17 @@
-# AI Analytics SaaS MVP
+# AI Analytics SaaS MVP (Data Bot AI v1.0.0)
 
-A local-first AI Analytics SaaS MVP built with:
+A local-first AI Analytics SaaS platform built with:
 
 - Backend: FastAPI
 - Frontend: Streamlit
 - Data processing: Pandas
-- Storage: Local CSV + JSON metadata
-- AI layer: Rule-based insights + LLM-ready placeholder
+- Storage: Local object storage + optional SQL persistence
+- AI layer: AI Analyst runtime (planning, tools, memory, RAG, evaluation)
 
-This MVP is intentionally simple and modular. It supports CSV/Excel upload, validation, preview, executive dashboards, KPI cards, Plotly charts, business-safe insights, SQL/DAX workbenches, and export-ready PDF/PPTX/XLSX/PNG reports over uploaded datasets.
+**Official release:** `v1.0.0`  
+**Engineering Handbook:** [`documentation/README.md`](documentation/README.md)
+
+This product supports CSV/Excel upload, validation, preview, executive dashboards, KPI cards, Plotly charts, business insights, SQL/DAX workbenches, AI analyst workflows, multi-tenant auth/RBAC, jobs, monitoring, and export-ready PDF/PPTX/XLSX/PNG reports.
 
 ---
 

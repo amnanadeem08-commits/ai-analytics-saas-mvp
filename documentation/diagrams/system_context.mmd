@@ -1,0 +1,8 @@
+flowchart LR
+  User --> Streamlit
+  Streamlit --> FastAPI
+  FastAPI --> Services
+  Services --> DB[(Database)]
+  Services --> Files[(Object Storage)]
+  Services --> Queue
+  Services --> LLM[LLM Providers]
