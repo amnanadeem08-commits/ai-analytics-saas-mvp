@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
-from backend.core.exceptions import DatasetNotFoundError
+from backend.services.dataset_service import get_dataset_metadata
 from backend.storage.dataset_registry import dataset_meta_path
 
 
-def _catalog_path(dataset_id: str):
+def _catalog_path(dataset_id: str) -> Path:
     return dataset_meta_path(dataset_id).with_name("custom_chart_specs.json")
 
 
 def load_custom_chart_specs(dataset_id: str) -> list[dict[str, Any]]:
-    if not dataset_meta_path(dataset_id).exists():
-        raise DatasetNotFoundError(f"Dataset '{dataset_id}' was not found.")
+    get_dataset_metadata(dataset_id)
     path = _catalog_path(dataset_id)
     if not path.exists():
         return []
@@ -22,8 +22,7 @@ def load_custom_chart_specs(dataset_id: str) -> list[dict[str, Any]]:
 
 
 def register_custom_chart_spec(dataset_id: str, chart: dict[str, Any]) -> dict[str, Any]:
-    if not dataset_meta_path(dataset_id).exists():
-        raise DatasetNotFoundError(f"Dataset '{dataset_id}' was not found.")
+    get_dataset_metadata(dataset_id)
     chart_id = chart["chart_id"]
     path = _catalog_path(dataset_id)
     existing: dict[str, dict[str, Any]] = {}

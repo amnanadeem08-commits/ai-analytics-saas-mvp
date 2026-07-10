@@ -95,6 +95,58 @@ def test_customer_churn_domain_prioritizes_churn_business_columns():
     assert ordered.index("Age Group") > ordered.index("Payment Risk")
 
 
+def test_customer_churn_suggests_payment_risk_without_payment_method_column():
+    df = pd.DataFrame(
+        {
+            "customer_id": ["C1", "C2", "C3"],
+            "churn": ["Yes", "No", "Yes"],
+            "tenure": [3, 18, 7],
+            "monthly_charges": [91, 42, 85],
+            "contract_type": ["Month-to-month", "One year", "Month-to-month"],
+        }
+    )
+
+    suggestions = detect_available_recipes(df, domain_context={"domain": "Customer Churn"})
+    ordered = [item["target_column"] for item in suggestions]
+
+    assert "Payment Risk" in ordered
+
+
+def test_customer_churn_suggests_payment_risk_with_payment_method_only():
+    df = pd.DataFrame(
+        {
+            "customer_id": ["C1", "C2", "C3"],
+            "churn": ["Yes", "No", "Yes"],
+            "tenure": [3, 18, 7],
+            "monthly_charges": [91, 42, 85],
+            "payment_method": ["Electronic check", "Bank transfer", "Credit card"],
+        }
+    )
+
+    suggestions = detect_available_recipes(df, domain_context={"domain": "Customer Churn"})
+    ordered = [item["target_column"] for item in suggestions]
+
+    assert "Payment Risk" in ordered
+
+
+def test_customer_churn_suggests_contract_category_with_contract_alias():
+    df = pd.DataFrame(
+        {
+            "customer_id": ["C1", "C2", "C3"],
+            "churn": ["Yes", "No", "Yes"],
+            "tenure": [3, 18, 7],
+            "monthly_charges": [91, 42, 85],
+            "contract": ["Month-to-month", "One year", "Two year"],
+        }
+    )
+
+    suggestions = detect_available_recipes(df, domain_context={"domain": "Customer Churn"})
+    ordered = [item["target_column"] for item in suggestions]
+
+    assert "Contract Category" in ordered
+    assert "Payment Risk" in ordered
+
+
 def test_generate_domain_business_questions_for_churn():
     questions = generate_domain_business_questions({"domain": "Customer Churn"})
 

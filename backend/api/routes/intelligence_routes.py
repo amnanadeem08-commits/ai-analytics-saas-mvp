@@ -1,3 +1,13 @@
+"""Intelligence API routes.
+
+Response models are intentionally omitted on these endpoints:
+- Payloads are domain-dependent and change with detection templates and KPI packs.
+- Contract tests assert legacy keys (e.g. executive-storyboard section shape,
+  domain route phase-3 fields like domain_detector and dynamic_storyboard_template).
+- Even loose response_model schemas risk stripping undeclared keys during
+  response validation or failing when optional domain branches omit fields.
+"""
+
 from fastapi import APIRouter, Query
 
 from backend.api.deps import map_app_error

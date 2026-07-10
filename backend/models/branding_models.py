@@ -29,4 +29,6 @@ class BrandingResponse(BaseModel):
 
 
 class BrandingPayload(BaseModel):
+    """Reserved for future branding bundle endpoints."""
+
     branding: dict[str, Any]

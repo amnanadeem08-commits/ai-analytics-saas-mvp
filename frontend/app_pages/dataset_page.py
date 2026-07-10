@@ -321,13 +321,19 @@ def render_data_cleaning(client: BackendClient) -> None:
         use_container_width=True,
     )
 
-    # AI Business Column Suggestions (local session only; user-initiated creation only)
-    if is_local_dataset_id(dataset_id):
-        _render_ai_business_column_suggestions(dataset_id)
+    # AI Business Column Suggestions (local and backend datasets)
+    _render_ai_business_column_suggestions(dataset_id, client)
 
 
-def _render_ai_business_column_suggestions(dataset_id: str) -> None:
+def _render_ai_business_column_suggestions(dataset_id: str, client: BackendClient | None = None) -> None:
     df = _local_active_dataframe(dataset_id)
+    if (df is None or df.empty) and client is not None and not is_local_dataset_id(dataset_id):
+        try:
+            preview = client.get_preview(dataset_id, rows=500)
+            df = pd.DataFrame(preview.get("rows", []))
+        except Exception:
+            df = None
+
     if df is None or df.empty:
         st.info("Upload a dataset to enable calculated business column suggestions.")
         return

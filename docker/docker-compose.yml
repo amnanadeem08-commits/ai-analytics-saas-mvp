@@ -1,0 +1,104 @@
+# Data Bot AI — Docker Compose (Sprint 8.5)
+# Usage:
+#   Development:  docker compose --profile dev up
+#   Production:   docker compose --profile prod up -d
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    profiles: [dev, prod]
+    environment:
+      POSTGRES_USER: databot
+      POSTGRES_PASSWORD: databot
+      POSTGRES_DB: databot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U databot -d databot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [databot]
+
+  redis:
+    image: redis:7-alpine
+    profiles: [dev, prod]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [databot]
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    profiles: [dev, prod]
+    env_file:
+      - .env.example
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgresql://databot:databot@postgres:5432/databot
+      STORAGE_BACKEND: postgres
+      QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - app_data:/app/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [databot]
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    profiles: [prod]
+    env_file:
+      - .env.example
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql://databot:databot@postgres:5432/databot
+      STORAGE_BACKEND: postgres
+      QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
+      WORKER_ENABLED: "true"
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    networks: [databot]
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    profiles: [dev, prod]
+    environment:
+      API_BASE_URL: http://backend:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      backend:
+        condition: service_started
+    networks: [databot]
+
+networks:
+  databot:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  app_data:

@@ -1,0 +1,144 @@
+from __future__ import annotations
+
+import json
+import os
+from typing import Any
+from urllib import error, request
+
+from backend.models.ai_insight_models import utc_now_iso
+from backend.models.llm_models import LLMProviderConfig
+from backend.services.llm_service import LLMProvider, MockLLMProvider
+
+
+class LocalProvider(LLMProvider):
+    """Local/OpenAI-compatible endpoint adapter (e.g. Ollama/vLLM). Safe fallback to mock."""
+
+    def __init__(self, config: LLMProviderConfig | None = None) -> None:
+        self.config = config or LLMProviderConfig(
+            provider_name="local",
+            model_name=os.getenv("LOCAL_LLM_MODEL", "local-model"),
+            api_key_env="LOCAL_LLM_API_KEY",
+            base_url=os.getenv("LOCAL_LLM_BASE_URL", "http://127.0.0.1:11434/v1"),
+            enabled=True,
+        )
+        self.provider_id = "local"
+        self._fallback = MockLLMProvider(provider_id="mock_local_fallback")
+
+    def _api_key(self) -> str:
+        env_name = self.config.api_key_env or "LOCAL_LLM_API_KEY"
+        return os.getenv(env_name, "").strip()
+
+    def _available(self) -> bool:
+        # Require explicit enable flag so default localhost URL never blocks tests/CI.
+        env_enabled = os.getenv("LOCAL_LLM_ENABLED", "").strip().lower() in {"1", "true", "yes"}
+        return bool(self.config.enabled and env_enabled and self.config.base_url)
+
+    def generate(
+        self,
+        prompt: str,
+        *,
+        system: str = "",
+        temperature: float = 0.0,
+        max_tokens: int = 512,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if not self._available():
+            out = self._fallback.generate(
+                prompt,
+                system=system,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                metadata={**(metadata or {}), "fallback_reason": "local_unavailable"},
+            )
+            out["provider"] = "local"
+            out["fallback"] = True
+            return out
+        try:
+            payload = {
+                "model": self.config.model_name,
+                "temperature": temperature if temperature is not None else self.config.temperature,
+                "max_tokens": max_tokens or self.config.max_tokens,
+                "messages": (
+                    ([{"role": "system", "content": system}] if system else [])
+                    + [{"role": "user", "content": prompt}]
+                ),
+            }
+            data = self._post("/chat/completions", payload)
+            content = (
+                (((data.get("choices") or [{}])[0]).get("message") or {}).get("content")
+                or data.get("response")
+                or ""
+            )
+            return {
+                "provider": "local",
+                "mode": "generate",
+                "text": content,
+                "model": self.config.model_name,
+                "usage": data.get("usage") or {},
+                "generated_at": utc_now_iso(),
+                "metadata": dict(metadata or {}),
+                "raw": data,
+            }
+        except Exception as exc:  # noqa: BLE001
+            out = self._fallback.generate(
+                prompt,
+                system=system,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                metadata={**(metadata or {}), "fallback_reason": str(exc)},
+            )
+            out["provider"] = "local"
+            out["fallback"] = True
+            out["error"] = str(exc)
+            return out
+
+    def structured_generate(
+        self,
+        prompt: str,
+        *,
+        schema: dict[str, Any] | None = None,
+        system: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        schema = schema or {"type": "object", "properties": {"summary": {"type": "string"}}}
+        guided = (
+            f"{prompt}\n\nReturn ONLY valid JSON matching this schema:\n"
+            f"{json.dumps(schema)}"
+        )
+        raw = self.generate(guided, system=system or "Return JSON only.", metadata=metadata)
+        text = str(raw.get("text") or "")
+        try:
+            data = json.loads(text)
+            if not isinstance(data, dict):
+                data = {"value": data}
+        except Exception:
+            data = self._fallback.structured_generate(
+                prompt, schema=schema, system=system, metadata=metadata
+            ).get("data", {"summary": text})
+        return {
+            "provider": "local",
+            "mode": "structured_generate",
+            "data": data,
+            "schema": schema,
+            "generated_at": utc_now_iso(),
+            "metadata": dict(metadata or {}),
+            "fallback": bool(raw.get("fallback")),
+            "raw": raw,
+        }
+
+    def validate_response(self, response: dict[str, Any]) -> dict[str, object]:
+        return self._fallback.validate_response(response)
+
+    def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        url = self.config.base_url.rstrip("/") + path
+        body = json.dumps(payload).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        key = self._api_key()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        req = request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with request.urlopen(req, timeout=20) as resp:  # noqa: S310
+                return json.loads(resp.read().decode("utf-8"))
+        except error.URLError as exc:
+            raise RuntimeError(f"Local LLM request failed: {exc}") from exc

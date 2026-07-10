@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import time
+from typing import Any
 from urllib.parse import urlparse
 
 import pandas as pd
@@ -21,9 +22,58 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 LOCAL_MODE_INFO_MESSAGE = "Backend unavailable — running local Streamlit analysis mode."
 
+# How long (seconds) to re-use a cached health check result before probing again.
+_BACKEND_STATUS_CACHE_TTL = 15.0
+
 
 def get_client(base_url: str) -> BackendClient:
     return BackendClient(base_url=base_url)
+
+
+# ── Connection status ────────────────────────────────────────────────────────
+
+
+def check_backend_connection(client: BackendClient) -> dict[str, Any]:
+    """Probe the backend health endpoint and return a status dict.
+
+    The result is cached in ``st.session_state`` for ``_BACKEND_STATUS_CACHE_TTL``
+    seconds so repeated Streamlit reruns do not flood the backend with health checks.
+
+    Returned keys:
+        connected (bool): True when the backend responded successfully.
+        version (str): Backend version string (may be empty).
+        latency_ms (int | None): Round-trip time in milliseconds, or None on failure.
+        error (str): Human-readable error message when not connected.
+        checked_at (float): UNIX timestamp of the last probe.
+    """
+    now = time.time()
+    cache: dict[str, Any] = st.session_state.get("_backend_status_cache", {})
+    if cache.get("checked_at", 0) > now - _BACKEND_STATUS_CACHE_TTL:
+        return cache
+
+    status: dict[str, Any] = {
+        "checked_at": now,
+        "connected": False,
+        "version": "",
+        "latency_ms": None,
+        "error": "",
+    }
+    try:
+        t0 = time.time()
+        health = client.health()
+        status["latency_ms"] = round((time.time() - t0) * 1000)
+        status["connected"] = True
+        status["version"] = health.get("version", "")
+    except requests.RequestException as exc:
+        status["error"] = BackendClient._friendly_error(exc)
+
+    st.session_state["_backend_status_cache"] = status
+    return status
+
+
+def invalidate_backend_status_cache() -> None:
+    """Force the next ``check_backend_connection`` call to probe the backend."""
+    st.session_state.pop("_backend_status_cache", None)
 
 def safe_table(rows: list[dict]) -> pd.DataFrame:
     """Normalize nested API values so Streamlit/PyArrow can render them."""
@@ -115,14 +165,33 @@ def ensure_backend_available(client: BackendClient) -> bool:
     return False
 
 def render_backend_status(client: BackendClient) -> None:
-    try:
-        if not ensure_backend_available(client):
-            raise requests.RequestException(st.session_state.get("backend_autostart_error", "Backend unavailable"))
-        health = client.health()
-        st.sidebar.success(f"Backend connected: {health.get('version', '')}")
+    """Render backend connectivity status in the sidebar.
+
+    Shows connection, version, latency on success, or a friendly offline notice.
+    Never exposes Python tracebacks to the end user.
+    """
+    if not ensure_backend_available(client):
+        error_msg = st.session_state.get("backend_autostart_error", "")
+        notice = LOCAL_MODE_INFO_MESSAGE
+        if error_msg:
+            notice = f"{LOCAL_MODE_INFO_MESSAGE}\n\n{error_msg}"
+        st.sidebar.warning(notice)
+        st.session_state["local_mode_notice"] = True
+        st.session_state["backend_connected"] = False
+        return
+
+    status = check_backend_connection(client)
+    if status["connected"]:
+        version_tag = f" · v{status['version']}" if status.get("version") else ""
+        latency_tag = f" · {status['latency_ms']} ms" if status.get("latency_ms") is not None else ""
+        st.sidebar.success(f"Backend connected{version_tag}{latency_tag}")
         st.session_state["local_mode_notice"] = False
-    except requests.RequestException:
-        st.sidebar.info(LOCAL_MODE_INFO_MESSAGE)
+        st.session_state["backend_connected"] = True
+    else:
+        friendly = status.get("error") or "Backend unavailable."
+        st.sidebar.warning(f"{friendly}\n\nLocal analysis mode is active.")
+        st.session_state["local_mode_notice"] = True
+        st.session_state["backend_connected"] = False
 
 def is_local_dataset_id(dataset_id: str | None) -> bool:
     if not dataset_id:

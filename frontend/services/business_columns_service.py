@@ -15,6 +15,7 @@ class BusinessColumnRecipe:
 
     # Dependency specification (case-insensitive matching against df.columns)
     required_columns: tuple[str, ...] = ()
+    required_any_columns: tuple[str, ...] = ()
     optional_columns: tuple[str, ...] = ()
 
     # Deterministic behavior only (given a df, formula returns a Series of same length)
@@ -196,13 +197,29 @@ def _formula_contract_category(df: pd.DataFrame, m: dict[str, str]) -> pd.Series
 
 def _formula_payment_risk(df: pd.DataFrame, m: dict[str, str]) -> pd.Series:
     payment_col = _get_column_if_present(m, ("payment_method", "payment", "payment_type"))
-    if not payment_col:
-        raise ValueError("Missing payment method column for payment risk recipe.")
-    text = df[payment_col].astype("string").str.lower().fillna("")
+    contract_col = _get_column_if_present(m, ("contract_type", "contract"))
+    charges_col = _get_column_if_present(m, ("monthly_charges", "monthly_revenue", "revenue", "sales"))
+
+    if not payment_col and not contract_col:
+        raise ValueError("Missing payment method or contract column for payment risk recipe.")
+
+    base_text = pd.Series("", index=df.index, dtype="string")
+    if payment_col:
+        base_text = base_text + " " + df[payment_col].astype("string").str.lower().fillna("")
+    if contract_col:
+        base_text = base_text + " " + df[contract_col].astype("string").str.lower().fillna("")
+    text = base_text.str.strip()
+
     out = pd.Series("Medium", index=df.index, dtype="string")
-    out.loc[text.str.contains("electronic|credit|debit|auto", regex=True)] = "High"
+    out.loc[text.str.contains("electronic|credit|debit|auto|month-to-month", regex=True)] = "High"
     out.loc[text.str.contains("bank transfer|bank|wire", regex=True)] = "Low"
-    out.loc[text.str.contains("mailed|cash|check", regex=True)] = "Medium"
+    out.loc[text.str.contains("mailed|cash|check|one year|two year", regex=True)] = "Medium"
+
+    if charges_col:
+        values = _safe_numeric(df, charges_col)
+        threshold = float(values.dropna().quantile(0.75)) if not values.dropna().empty else 0.0
+        out.loc[values.ge(threshold) & out.eq("High")] = "Critical"
+
     return out
 
 
@@ -326,16 +343,15 @@ def _build_recipe_registry() -> list[BusinessColumnRecipe]:
             target_column="Contract Category",
             display_name="Contract Category",
             description="Normalized contract grouping for churn and retention analysis.",
-            required_columns=("contract_type",),
-            optional_columns=("contract",),
+            required_any_columns=("contract_type", "contract"),
             formula=_formula_contract_category,
         ),
         BusinessColumnRecipe(
             target_column="Payment Risk",
             display_name="Payment Risk",
             description="Payment method risk categorization for churn review.",
-            required_columns=("payment_method",),
-            optional_columns=("payment", "payment_type"),
+            required_any_columns=("payment_method", "payment", "payment_type", "contract_type", "contract"),
+            optional_columns=("monthly_charges", "monthly_revenue", "revenue", "sales"),
             formula=_formula_payment_risk,
         ),
         BusinessColumnRecipe(
@@ -436,7 +452,7 @@ def detect_available_recipes(df: pd.DataFrame, domain_context: dict[str, Any] | 
     Returns suggestion objects without mutating df.
     Each suggestion includes:
       - recipe
-      - depends_on_columns: the actual df column names used for each required/optional key
+    - depends_on_columns: the actual df column names used for each required/required-any/optional key
       - target_column
     """
     mapping = _available_column_map(df)
@@ -461,6 +477,7 @@ def detect_available_recipes(df: pd.DataFrame, domain_context: dict[str, Any] | 
 
         # Dependency validation:
         # - required_columns must all exist (case-insensitive)
+        # - when required_any_columns is set, at least one alias must exist
         # - optional_columns may exist, but are not required for suggestion
         required_present_actual: dict[str, str] = {}
         ok = True
@@ -470,10 +487,16 @@ def detect_available_recipes(df: pd.DataFrame, domain_context: dict[str, Any] | 
                 ok = False
                 break
             required_present_actual[req_norm] = mapping[req_norm]
+        if ok and recipe.required_any_columns:
+            any_matches = _resolve_any_columns(recipe.required_any_columns)
+            if not any_matches:
+                ok = False
         if not ok:
             continue
 
         depends_on = [required_present_actual[_normalize_col(req)] for req in recipe.required_columns if _normalize_col(req) in required_present_actual]
+        if recipe.required_any_columns:
+            depends_on.extend(_resolve_any_columns(recipe.required_any_columns))
 
         # Note: we do NOT require optional columns; they are handled inside formulas
         # using whichever alternate names are actually present.
