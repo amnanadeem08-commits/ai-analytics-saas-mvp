@@ -1,18 +1,23 @@
+import { ContactSection } from "@/components/ContactSection";
 import { Hero } from "@/components/Hero";
+import { HowWeWork } from "@/components/HowWeWork";
+import { ProductSignalFeed } from "@/components/ProductSignalFeed";
+import { ProofSection } from "@/components/ProofSection";
+import { SiteFooter } from "@/components/SiteFooter";
 import { SiteHeader } from "@/components/SiteHeader";
 
 export default function HomePage() {
   return (
     <>
       <SiteHeader />
-      <main>
+      <main id="main-content">
         <Hero />
-        <div className="mx-auto max-w-site px-6 py-16">
-          <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">
-            phase 2 · hero instrument online — remaining sections next
-          </p>
-        </div>
+        <ProductSignalFeed />
+        <HowWeWork />
+        <ProofSection />
+        <ContactSection />
       </main>
+      <SiteFooter />
     </>
   );
 }
