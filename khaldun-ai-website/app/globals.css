@@ -1,0 +1,39 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ink: #0b0f19;
+  --panel: #121826;
+  --signal: #17d9c4;
+  --amber: #f2a93b;
+  --paper: #edeff4;
+  --muted: #6b7280;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+body {
+  color: var(--paper);
+  background: var(--ink);
+  font-family: var(--font-body), system-ui, sans-serif;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--signal) 35%, transparent);
+  color: var(--paper);
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
