@@ -12,7 +12,11 @@
 - [x] TD-010 FE layer boundary (`ai_insights_page`)
 - [x] Production Docker Compose verification (static gate; live requires Docker Desktop)
 - [x] End-to-end smoke test with real datasets (`scripts/e2e_smoke.py`)
+- [x] Cut `release/1.0` + `develop`; confirm `v1.0.0` tag (GA); hardening on `main` as `232574f`
 
-## Next (production readiness — feature freeze)
+## Next (beta launch ops)
 
-- [ ] Confirm/retag v1.0.0 + beta launch on `release/1.0` — **next**
+- [ ] Push `main`, `release/1.0`, `develop` to origin
+- [ ] Tag `v1.0.1` on hardening tip (recommended patch) or publish beta notes from `release/1.0`
+- [ ] Live Docker Compose `--profile prod` on a Docker host
+- [ ] Beta user invite / go-live checklist

@@ -42,7 +42,8 @@ Not allowed:
 - [x] TD-010 FE layer boundary — complete 2026-07-11
 - [x] Production Docker Compose verification — complete 2026-07-11 (static; live on Docker host)
 - [x] E2E smoke with real datasets — complete 2026-07-11
-- [ ] Next: Confirm v1.0.0 / beta on `release/1.0`
+- [x] Branch cut: `release/1.0` + `develop` — complete 2026-07-11
+- [ ] Ops: push branches, optional `v1.0.1` tag, live Compose, beta invite
 
 ## Principles
 
