@@ -6,6 +6,10 @@ All notable changes to Data Bot AI are documented in this file.
 
 ### Added
 
+- Production CORS fail-fast: refuse missing/wildcard `CORS_ALLOWED_ORIGINS` when `APP_ENV=production` (KI-006)
+- Durable storage object metadata catalog (file JSON index + SQLAlchemy `storage_objects`) — KI-009
+- Automatic file→SQL metadata migration when SQL catalog is empty
+- Production JWT fail-fast: refuse `APP_ENV=production` boot with missing/weak/placeholder secrets (KI-007)
 - Production S3 object storage provider (boto3) with MinIO/LocalStack endpoint support
 - `OBJECT_STORAGE_BACKEND` env (avoids collision with DB `STORAGE_BACKEND`)
 - Persistent commercial stores (SQLAlchemy) for billing/subscriptions/usage/API keys
@@ -15,7 +19,14 @@ All notable changes to Data Bot AI are documented in this file.
 
 ### Changed
 
+- E2E smoke gate expanded for real sample sales dataset (intelligence + live/ready + release checks); runner `scripts/e2e_smoke.py`
+- Docker Compose prod profile: backend healthcheck, JWT/CORS env passthrough, `.env.production.example`, `verify_prod_compose.py` gate
+- TD-010: AI Insights local mode imports `backend.analytics` instead of `backend.services` (arch gate green)
+- Development CORS: unset origins default to localhost (Streamlit/API); explicit `*` still allowed for open local CORS
+- Default storage metadata backend is durable (`file`, or `sqlalchemy` when DB enabled); `memory` retained for tests
+- Unified JWT secret resolution (`AUTH_JWT_SECRET` → `JWT_SECRET` → `SECRET_KEY`)
 - Production fail-fast when S3 is selected but misconfigured; non-prod falls back to local FS
+- Docker Compose worker defaults `APP_ENV` from env (safe local compose with placeholder secrets)
 
 ## [1.0.0] — 2026-07-10
 

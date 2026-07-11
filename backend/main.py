@@ -50,6 +50,13 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # KI-007 — refuse production boot with missing/weak JWT signing secrets
+    # KI-006 — refuse production boot with wildcard / missing CORS origins
+    from backend.security.cors_policy import assert_production_cors
+    from backend.security.secrets_validation import assert_production_secrets
+
+    assert_production_secrets()
+    assert_production_cors()
     logger.info("Starting %s v%s", settings.APP_NAME, settings.API_VERSION)
     register_shutdown_hook(lambda: logger.info("Application shutdown hook invoked"))
     yield

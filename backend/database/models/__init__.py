@@ -19,6 +19,7 @@ from backend.database.models.commercial import (
     SubscriptionORM,
     UsageRecordORM,
 )
+from backend.database.models.storage import StorageObjectORM
 from backend.database.models.auth import (
     EmailVerificationORM,
     PasswordResetRequestORM,
@@ -68,4 +69,5 @@ __all__ = [
     "PaymentAttemptORM",
     "UsageRecordORM",
     "ApiKeyORM",
+    "StorageObjectORM",
 ]

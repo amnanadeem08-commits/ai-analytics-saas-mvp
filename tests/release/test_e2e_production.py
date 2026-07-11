@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-"""End-to-end production validation using the real sample sales dataset."""
+"""End-to-end production smoke using the real sample sales dataset.
+
+Covers upload → analytics → intelligence → auth/storage/jobs → release gates.
+"""
 
 from pathlib import Path
 from uuid import uuid4
@@ -22,9 +25,7 @@ def setup_function():
     reset_rate_limiter()
 
 
-def test_e2e_real_dataset_upload_analytics_and_release_gates(monkeypatch, tmp_path):
-    assert SAMPLE.exists(), f"Missing sample dataset: {SAMPLE}"
-
+def _isolate_data_dirs(monkeypatch, tmp_path) -> None:
     test_root = tmp_path / "e2e"
     monkeypatch.setattr(settings, "DATA_DIR", test_root)
     monkeypatch.setattr(settings, "UPLOADS_DIR", test_root / "uploads")
@@ -39,6 +40,11 @@ def test_e2e_real_dataset_upload_analytics_and_release_gates(monkeypatch, tmp_pa
     monkeypatch.setattr(settings, "THEME_STATE_FILE", test_root / "metadata" / "theme_state.json")
     ensure_data_directories()
     theme_manager.set_active("power_bi_professional")
+
+
+def test_e2e_real_dataset_upload_analytics_and_release_gates(monkeypatch, tmp_path):
+    assert SAMPLE.exists(), f"Missing sample dataset: {SAMPLE}"
+    _isolate_data_dirs(monkeypatch, tmp_path)
 
     client = TestClient(app)
     content = SAMPLE.read_bytes()
@@ -69,14 +75,36 @@ def test_e2e_real_dataset_upload_analytics_and_release_gates(monkeypatch, tmp_pa
     dash = dashboard.json()
     assert dash["kpi_cards"]
 
-    # 4) Auth + org path
+    # 4) Intelligence + insights on real data
+    data_insights = client.get(f"/intelligence/{dataset_id}/data-insights")
+    assert data_insights.status_code == 200, data_insights.text
+    assert data_insights.json().get("dataset_health", {}).get("row_count", 0) >= 20
+
+    ai_business = client.get(f"/intelligence/{dataset_id}/ai-business-insights")
+    assert ai_business.status_code == 200, ai_business.text
+    assert isinstance(ai_business.json().get("cards"), list)
+
+    domain = client.get(f"/intelligence/{dataset_id}/domain")
+    assert domain.status_code == 200, domain.text
+    assert domain.json().get("detected_domain") or domain.json().get("detection")
+
+    insights = client.get(f"/insights/{dataset_id}")
+    assert insights.status_code == 200, insights.text
+
+    ask = client.post(
+        f"/insights/{dataset_id}/ask",
+        json={"question": "Which region has the strongest sales?"},
+    )
+    assert ask.status_code == 200, ask.text
+
+    # 5) Auth + org path
     email = f"e2e_{uuid4().hex[:8]}@example.com"
     reg = client.post("/api/v1/auth/register", json={"email": email, "password": STRONG})
     assert reg.status_code == 201
     token = client.post("/api/v1/auth/login", json={"email": email, "password": STRONG}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    # 5) Storage upload of same dataset bytes
+    # 6) Storage upload of same dataset bytes
     storage = client.post(
         "/api/v1/storage/upload",
         files={"file": (SAMPLE.name, content, "text/csv")},
@@ -85,7 +113,7 @@ def test_e2e_real_dataset_upload_analytics_and_release_gates(monkeypatch, tmp_pa
     )
     assert storage.status_code == 201, storage.text
 
-    # 6) Job submit
+    # 7) Job submit
     job = client.post(
         "/api/v1/jobs",
         json={"job_type": "generic", "payload": {"dataset_id": dataset_id}, "inline": True},
@@ -93,11 +121,16 @@ def test_e2e_real_dataset_upload_analytics_and_release_gates(monkeypatch, tmp_pa
     )
     assert job.status_code == 201
 
-    # 7) Security headers + release validation
+    # 8) Health / live / ready + security headers + release validation
     health = client.get("/health")
     assert health.status_code == 200
     assert health.headers.get("X-Content-Type-Options") == "nosniff"
     assert health.json()["version"] == "1.0.0"
+
+    live = client.get("/api/v1/live")
+    assert live.status_code == 200
+    ready = client.get("/api/v1/ready")
+    assert ready.status_code == 200
 
     validation = client.get("/api/v1/release/validation")
     assert validation.status_code == 200
@@ -122,3 +155,13 @@ def test_e2e_real_dataset_upload_analytics_and_release_gates(monkeypatch, tmp_pa
     security = client.get("/api/v1/release/security/audit")
     assert security.status_code == 200
     assert security.json()["success"] is True
+
+
+def test_e2e_sample_dataset_row_coverage():
+    """Guardrail: sample file remains substantial enough for smoke confidence."""
+    assert SAMPLE.exists()
+    lines = SAMPLE.read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) >= 21  # header + ≥20 rows
+    header = lines[0].lower()
+    for col in ("date", "sales", "region", "product"):
+        assert col in header

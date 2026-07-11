@@ -18,7 +18,18 @@ def validate_secret(name: str, value: str, *, min_length: int = 16, required_in_
     if len(value) < min_length:
         issues.append(f"{name} must be at least {min_length} characters")
     lowered = value.lower()
-    if lowered in {"changeme", "secret", "password", "test", "dev"}:
+    if lowered in {
+        "changeme",
+        "change-me",
+        "change-me-in-production-min-16",
+        "secret",
+        "password",
+        "test",
+        "dev",
+        "development",
+        "dev-insecure-secret-change-me",
+        "local-compose-dev-secret-not-for-production-use",
+    }:
         issues.append(f"{name} must not use a placeholder value")
     return issues
 
@@ -42,8 +53,13 @@ def validate_settings(data: dict[str, Any]) -> dict[str, Any]:
     except (TypeError, ValueError):
         issues.append("MAX_UPLOAD_SIZE_MB must be an integer")
 
-    jwt_secret = str(data.get("JWT_SECRET", "") or data.get("SECRET_KEY", ""))
-    min_len = int(data.get("JWT_SECRET_MIN_LENGTH", 16))
+    jwt_secret = str(
+        data.get("AUTH_JWT_SECRET", "")
+        or data.get("JWT_SECRET", "")
+        or data.get("SECRET_KEY", "")
+        or ""
+    )
+    min_len = int(data.get("JWT_SECRET_MIN_LENGTH", 32 if profile.is_production else 16))
     if profile.is_production:
         issues.extend(validate_secret("JWT_SECRET", jwt_secret, min_length=min_len))
         if str(data.get("LOG_FORMAT", "")).lower() != "json":

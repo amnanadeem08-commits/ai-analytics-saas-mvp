@@ -18,8 +18,10 @@ def _bool_env(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-# Development-only fallback secret. Production MUST set AUTH_JWT_SECRET.
-_DEFAULT_DEV_SECRET = "dev-insecure-secret-change-me"
+from backend.security.secrets_validation import DEFAULT_DEV_JWT_SECRET, resolve_jwt_secret
+
+# Development-only fallback secret. Production MUST set AUTH_JWT_SECRET / JWT_SECRET.
+_DEFAULT_DEV_SECRET = DEFAULT_DEV_JWT_SECRET
 
 
 @dataclass
@@ -29,7 +31,7 @@ class SecurityConfig:
     Never hardcodes production secrets. All values are overridable via env vars.
     """
 
-    jwt_secret: str = field(default_factory=lambda: os.getenv("AUTH_JWT_SECRET", _DEFAULT_DEV_SECRET))
+    jwt_secret: str = field(default_factory=resolve_jwt_secret)
     jwt_algorithm: str = field(default_factory=lambda: os.getenv("AUTH_JWT_ALGORITHM", "HS256"))
     jwt_issuer: str = field(default_factory=lambda: os.getenv("AUTH_JWT_ISSUER", "ai-analytics-saas"))
     jwt_audience: str = field(default_factory=lambda: os.getenv("AUTH_JWT_AUDIENCE", "ai-analytics-clients"))

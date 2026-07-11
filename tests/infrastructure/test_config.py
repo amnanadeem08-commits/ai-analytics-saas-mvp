@@ -38,6 +38,17 @@ def test_production_validation_requires_secret():
     assert any("JWT_SECRET" in issue for issue in validation["issues"])
 
 
+def test_production_validation_accepts_auth_jwt_secret():
+    env = {
+        "APP_ENV": "production",
+        "AUTH_JWT_SECRET": "production-grade-signing-secret-32chars-min-ok",
+        "LOG_FORMAT": "json",
+        "DATABASE_URL": "postgresql://databot:databot@db/databot",
+    }
+    validation = validate_settings(load_raw_config(env=env))
+    assert validation["valid"] is True
+
+
 def test_testing_profile_overrides():
     env = {"APP_ENV": "testing"}
     data = load_raw_config(env=env)

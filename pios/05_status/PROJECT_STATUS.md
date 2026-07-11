@@ -1,6 +1,6 @@
 # PROJECT_STATUS
 
-> Auto-maintained by `python pios/tools/refresh_status.py`. Last refresh: 2026-07-11 14:21 UTC
+> Auto-maintained by `python pios/tools/refresh_status.py`. Last refresh: 2026-07-11 15:25 UTC
 
 ## Snapshot
 
@@ -8,13 +8,13 @@
 |-------|-------|
 | Product | Data Bot AI (AI Analytics SaaS MVP) |
 | Current version | `1.0.0` (from `backend/core/config.py`) |
-| Current sprint | Commercial stores COMPLETE — next: S3 object storage |
+| Current sprint | Current Sprint — COMPLETE: E2E Smoke with Real Datasets |
 | Git tag | `v1.0.0` |
-| Test files (`test_*.py`) | **127** |
+| Test files (`test_*.py`) | **132** |
 | Route modules | **28** |
 | Service modules (`*_service.py`) | **89** |
-| Known issues | **8** (see `KNOWN_ISSUES.md`) |
-| Technical debt items | **10** (see `TECHNICAL_DEBT.md`) |
+| Known issues | **9** (see `KNOWN_ISSUES.md`) |
+| Technical debt items | **11** (see `TECHNICAL_DEBT.md`) |
 
 ## Route modules
 
@@ -64,6 +64,6 @@ See [`../01_vision/ROADMAP.md`](../01_vision/ROADMAP.md)
 
 ## Next sprint recommendation
 
-**S3 object storage** (Post-1.0 #3 / TD-003 / KI-003) — complete the production S3 provider beyond the stub so object storage can run off local filesystem when required.
+**Confirm / retag `v1.0.0` and beta launch on operator-created `release/1.0`** (feature freeze: bug fixes only). Commit pending production-hardening work first if desired.
 
 Run `python pios/tools/recommend_sprint.py` for ranked detail.

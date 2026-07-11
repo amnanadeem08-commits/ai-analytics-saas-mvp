@@ -1,7 +1,9 @@
-# Data Bot AI — Docker Compose (Sprint 8.5)
+# Data Bot AI — Docker Compose (Sprint 8.5 / production hardening)
 # Usage:
-#   Development:  docker compose --profile dev up
-#   Production:   docker compose --profile prod up -d
+#   Development:  docker compose --env-file .env.example --profile dev up --build
+#   Production:   copy .env.production.example → .env.production (set secrets), then:
+#                 docker compose --env-file .env.production --profile prod up --build -d
+#   Verify:       python verify_prod_compose.py [--live]
 
 services:
   postgres:
@@ -43,14 +45,27 @@ services:
       - .env.example
     environment:
       APP_ENV: ${APP_ENV:-development}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      CORS_ALLOW_CREDENTIALS: ${CORS_ALLOW_CREDENTIALS:-false}
       DATABASE_URL: postgresql://databot:databot@postgres:5432/databot
       STORAGE_BACKEND: postgres
+      STORAGE_METADATA_BACKEND: ${STORAGE_METADATA_BACKEND:-sqlalchemy}
+      OBJECT_STORAGE_BACKEND: ${OBJECT_STORAGE_BACKEND:-local}
       QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379/0
+      LOG_FORMAT: ${LOG_FORMAT:-json}
     volumes:
       - app_data:/app/data
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/v1/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 40s
     depends_on:
       postgres:
         condition: service_healthy
@@ -66,17 +81,23 @@ services:
     env_file:
       - .env.example
     environment:
-      APP_ENV: production
+      APP_ENV: ${APP_ENV:-development}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-}
+      JWT_SECRET: ${JWT_SECRET:-}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       DATABASE_URL: postgresql://databot:databot@postgres:5432/databot
       STORAGE_BACKEND: postgres
+      STORAGE_METADATA_BACKEND: ${STORAGE_METADATA_BACKEND:-sqlalchemy}
+      OBJECT_STORAGE_BACKEND: ${OBJECT_STORAGE_BACKEND:-local}
       QUEUE_BACKEND: redis
       REDIS_URL: redis://redis:6379/0
       WORKER_ENABLED: "true"
+      LOG_FORMAT: ${LOG_FORMAT:-json}
     volumes:
       - app_data:/app/data
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
     networks: [databot]
@@ -92,7 +113,7 @@ services:
       - "8501:8501"
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
     networks: [databot]
 
 networks:

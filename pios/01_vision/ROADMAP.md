@@ -36,10 +36,17 @@ Not allowed:
 - [x] Billing gateway — **complete 2026-07-11**
 - [x] Persistent commercial stores — **complete 2026-07-11**
 - [x] S3 object storage — **complete 2026-07-11**
-- [ ] Next: **Kubernetes / multi-node** or **Enterprise SSO** (pick via recommend_sprint)
+- [x] Production JWT fail-fast (KI-007) — **complete 2026-07-11**
+- [x] Durable storage metadata (KI-009) — **complete 2026-07-11**
+- [x] Production CORS hardening (KI-006) — **complete 2026-07-11**
+- [x] TD-010 FE layer boundary — **complete 2026-07-11**
+- [x] Production Docker Compose verification — **complete 2026-07-11** (static; live on Docker host)
+- [x] E2E smoke with real datasets — **complete 2026-07-11**
+- [ ] Next: **Confirm v1.0.0 / beta on `release/1.0`**
 
 ## Principles
 
-- New features land on `main`
-- Production hotfixes land on `release/v1.0` and cherry-pick to `main` when appropriate
+- **v1.0 feature freeze:** new product features land on `develop` for v1.1; `release/1.0` accepts bug fixes / security only
+- New features land on `main` / `develop` after freeze policy is applied by operators
+- Production hotfixes land on `release/1.0` and cherry-pick to `main` when appropriate
 - SemVer: patch for fixes, minor for compatible features, major for breaking API changes

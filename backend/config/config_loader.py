@@ -54,6 +54,7 @@ def load_raw_config(*, env: os._Environ[str] | None = None) -> dict[str, Any]:
         "METRICS_ENABLED": "METRICS_ENABLED",
         "TRACING_ENABLED": "TRACING_ENABLED",
         "JWT_SECRET": "JWT_SECRET",
+        "AUTH_JWT_SECRET": "AUTH_JWT_SECRET",
         "SECRET_KEY": "SECRET_KEY",
         "JWT_SECRET_MIN_LENGTH": "JWT_SECRET_MIN_LENGTH",
         "MAX_UPLOAD_SIZE_MB": "MAX_UPLOAD_SIZE_MB",
@@ -73,7 +74,9 @@ def load_raw_config(*, env: os._Environ[str] | None = None) -> dict[str, Any]:
         merged[bool_key] = _coerce_bool(merged.get(bool_key))
 
     if "JWT_SECRET" not in merged or not merged["JWT_SECRET"]:
-        merged["JWT_SECRET"] = merged.get("SECRET_KEY", "")
+        merged["JWT_SECRET"] = merged.get("AUTH_JWT_SECRET") or merged.get("SECRET_KEY", "")
+    if "AUTH_JWT_SECRET" in merged and merged["AUTH_JWT_SECRET"] and not merged.get("JWT_SECRET"):
+        merged["JWT_SECRET"] = merged["AUTH_JWT_SECRET"]
 
     try:
         merged["MAX_UPLOAD_SIZE_MB"] = int(merged.get("MAX_UPLOAD_SIZE_MB", 200))

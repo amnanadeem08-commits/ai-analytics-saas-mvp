@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from backend.storage.config import get_storage_config, reset_storage_config
 from backend.storage.factory import (
+    active_metadata_backend,
     active_provider,
     build_backend,
     build_metadata_store,
@@ -23,5 +24,6 @@ __all__ = [
     "build_backend",
     "build_metadata_store",
     "active_provider",
+    "active_metadata_backend",
     "reset_storage_backends",
 ]

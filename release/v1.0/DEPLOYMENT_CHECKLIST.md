@@ -10,3 +10,6 @@
 - [x] Release validation `/api/v1/release/validation` documented
 - [x] Monitoring endpoints documented
 - [x] Docker Compose path documented under `docker/`
+- [x] Production Compose env template (`.env.production.example`) with JWT + CORS requirements
+- [x] `docker/verify_prod_compose.py` static gate (live probes when Docker available)
+- [x] Backend compose healthcheck on `/api/v1/live`; worker/frontend wait for healthy backend
