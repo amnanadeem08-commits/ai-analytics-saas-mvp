@@ -97,7 +97,12 @@ def render_dataset_upload_area(client: BackendClient) -> None:
             st.session_state.pop("dataset_upload_signature", None)
             st.rerun()
 def render_dataset_overview(client: BackendClient) -> None:
-    st.header("Dataset Preview")
+    from frontend.components.ux_states import empty_state, error_panel, page_intro, section_header
+
+    page_intro(
+        "Dataset Preview",
+        "Inspect schema, quality metrics, and sample rows before you analyze.",
+    )
     branding = st.session_state.get("branding", DEFAULT_BRANDING)
     render_dataset_upload_area(client)
     st.divider()
@@ -107,6 +112,14 @@ def render_dataset_overview(client: BackendClient) -> None:
         local_dataset = st.session_state.get("local_uploaded_dataset")
         if local_dataset:
             _render_local_dataset_workbench(local_dataset["dataframe"], local_dataset["filename"], branding)
+        else:
+            empty_state(
+                "No dataset selected",
+                "Upload a file above or pick a saved dataset from the selector.",
+                primary_label="Open Dataset Manager",
+                primary_page="Dataset Manager",
+                key="ds_preview_empty",
+            )
         return
 
     if _is_local_dataset_id(dataset_id):
@@ -115,7 +128,13 @@ def render_dataset_overview(client: BackendClient) -> None:
         if active_df is not None:
             _render_local_dataset_workbench(active_df, local_dataset.get("original_filename", "Uploaded dataset"), branding)
         else:
-            st.info("Upload a dataset first from Dataset Preview.")
+            empty_state(
+                "Upload a dataset first",
+                "Use the upload area above, then return here to preview.",
+                primary_label="Upload data",
+                primary_page="Upload",
+                key="ds_preview_local_empty",
+            )
         return
 
     rows = st.slider("Preview rows", min_value=5, max_value=100, value=10, step=5)
@@ -130,21 +149,38 @@ def render_dataset_overview(client: BackendClient) -> None:
             f"{overview.get('missing_summary', {}).get('completeness_pct', 0)}%",
         )
         summary_cols[3].metric("Duplicates", f"{overview.get('duplicate_rows', 0):,}")
-        st.subheader("Column Schema")
+        section_header("Column Schema", "Types and nullability for each column")
         st.dataframe(pd.DataFrame(overview.get("column_schema", [])), use_container_width=True)
-        st.subheader("Preview")
+        section_header("Preview", f"First {rows} rows")
         st.dataframe(pd.DataFrame(preview["rows"]), use_container_width=True)
     except requests.RequestException as exc:
-        st.warning("Could not load backend preview. Showing local preview if available.")
+        error_panel(
+            "Could not load backend preview",
+            suggestion="Showing local preview if available. Check Connection in the sidebar.",
+            retry_key="ds_preview_api",
+        )
+        with st.expander("Technical details", expanded=False):
+            st.code(str(exc))
         local_dataset = st.session_state.get("local_uploaded_dataset")
         if local_dataset:
             _render_local_dataset_workbench(local_dataset["dataframe"], local_dataset["filename"], branding)
 def render_data_cleaning(client: BackendClient) -> None:
-    st.header("Data Quality Workspace")
-    st.caption("Recommendation-driven cleaning. Issues and recommendations are shown first; fixes are applied only when you submit.")
+    from frontend.components.ux_states import empty_state, page_intro
+
+    page_intro(
+        "Data Quality Workspace",
+        "Recommendation-driven cleaning. Issues and recommendations are shown first; fixes apply only when you submit.",
+    )
 
     dataset_id = select_dataset(client, key="data_cleaning_dataset_select")
     if not dataset_id:
+        empty_state(
+            "Select a dataset to clean",
+            "Upload or choose a dataset, then review recommendations before applying fixes.",
+            primary_label="Upload data",
+            primary_page="Upload",
+            key="clean_empty",
+        )
         return
 
     local_df_for_issues = _local_active_dataframe(dataset_id) if is_local_dataset_id(dataset_id) else None

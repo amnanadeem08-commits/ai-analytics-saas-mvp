@@ -122,20 +122,39 @@ def _render_statistical_glossary() -> None:
 
 
 def render_dashboard(client: BackendClient) -> None:
-    st.header("Executive Dashboard")
+    from frontend.components.ux_states import empty_state, error_panel, page_intro, section_header
+
+    page_intro(
+        "Executive Dashboard",
+        "KPIs, trends, and quality signals for the selected dataset.",
+    )
     _render_statistical_glossary()
     dataset_id = select_dataset(client)
     if not dataset_id:
+        empty_state(
+            "Select a dataset to open the dashboard",
+            "Upload data first, then return here for KPIs and charts.",
+            primary_label="Upload data",
+            primary_page="Upload",
+            key="dash_empty",
+        )
         return
 
     if _is_local_dataset_id(dataset_id):
         local_df = _local_active_dataframe(dataset_id)
         if local_df is None:
-            st.info("Upload a dataset first from Dataset Preview.")
+            empty_state(
+                "Upload a dataset first",
+                "Go to Upload or Dataset Preview, then open the dashboard again.",
+                primary_label="Upload data",
+                primary_page="Upload",
+                key="dash_local_empty",
+            )
             return
         st.info(LOCAL_MODE_INFO_MESSAGE)
         summary = _local_summary(local_df)
         palette = st.session_state.get("chart_palette", ["#0078D4", "#004E8C", "#F2C811", "#10B981", "#F97316"])
+        section_header("Local analysis", "Computed in-browser while the API is optional")
         _render_local_executive_dashboard(local_df, summary, palette)
         with st.expander("Dataset preview", expanded=False):
             st.dataframe(local_df.head(20), use_container_width=True)
@@ -153,6 +172,13 @@ def render_dashboard(client: BackendClient) -> None:
             else client.get_dashboard(dataset_id)
         )
     except requests.RequestException as exc:
+        error_panel(
+            "Dashboard could not load from the API",
+            suggestion="Check Connection in the sidebar, or use a local uploaded dataset.",
+            retry_key="dash_api",
+        )
+        with st.expander("Technical details", expanded=False):
+            st.code(str(exc))
         _warn_backend_unavailable("Stats Dashboard")
         return
 

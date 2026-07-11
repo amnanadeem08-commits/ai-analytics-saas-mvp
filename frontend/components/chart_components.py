@@ -23,19 +23,16 @@ def _chart_key(chart: dict, index: int) -> str:
 
 
 def _prepare_figure(chart: dict) -> go.Figure | None:
+    from frontend.design_system.charts import apply_chart_layout
+
     plotly_spec = chart.get("plotly", {})
     traces = plotly_spec.get("data", [])
     layout = plotly_spec.get("layout", {})
     if not traces:
         return None
     fig = go.Figure(data=traces, layout=layout)
-    fig.update_layout(
-        title=None,
-        height=380,
-        autosize=True,
-        margin=dict(l=52, r=24, t=24, b=72),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    )
+    apply_chart_layout(fig)
+    fig.update_layout(title=None, height=380, autosize=True)
     fig.update_xaxes(automargin=True)
     fig.update_yaxes(automargin=True)
     return fig

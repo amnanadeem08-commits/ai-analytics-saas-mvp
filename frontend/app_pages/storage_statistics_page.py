@@ -7,7 +7,6 @@ import streamlit as st
 from frontend.api.base import friendly_api_error
 from frontend.api.storage_client import StorageClient
 from frontend.utils.auth_state import is_authenticated, with_auto_refresh
-from frontend.utils.session_state import navigate_to
 from frontend.utils.workspace_api import get_api_client
 
 
@@ -16,14 +15,21 @@ def _client() -> StorageClient:
 
 
 def render_storage_statistics(client=None) -> None:
-    st.header("Storage Statistics")
-    st.caption("Quota usage and artifact counts from `/api/v1/storage/statistics`.")
+    from frontend.components.ux_states import empty_state, page_intro, section_header
+
+    page_intro(
+        "Storage Statistics",
+        "Quota usage and artifact counts from `/api/v1/storage/statistics`.",
+    )
 
     if not is_authenticated():
-        st.warning("Please sign in to view storage statistics.")
-        if st.button("Go to Login", key="stats_login"):
-            navigate_to("Login")
-            st.rerun()
+        empty_state(
+            "Sign in to view storage statistics",
+            "Quota and artifact counts require an authenticated session.",
+            primary_label="Go to Login",
+            primary_page="Login",
+            key="stats_login",
+        )
         return
 
     try:
@@ -32,6 +38,7 @@ def render_storage_statistics(client=None) -> None:
         st.error(friendly_api_error(exc))
         return
 
+    section_header("Usage summary")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total objects", stats.get("total_objects", 0))
     c2.metric("Active", stats.get("active_objects", 0))
@@ -43,9 +50,15 @@ def render_storage_statistics(client=None) -> None:
     c6.metric("Versions", stats.get("total_versions", 0))
     c7.metric("Quota used %", stats.get("quota_used_pct", 0.0))
 
-    st.subheader("By artifact type")
+    section_header("By artifact type")
     by_type = stats.get("by_artifact_type") or {}
     if by_type:
         st.bar_chart(by_type)
     else:
-        st.info("No artifacts stored yet.")
+        empty_state(
+            "No artifacts stored yet",
+            "Upload files from Storage Manager to populate these charts.",
+            primary_label="Open Storage Manager",
+            primary_page="Storage Manager",
+            key="stats_empty",
+        )

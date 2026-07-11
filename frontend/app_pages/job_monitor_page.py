@@ -6,8 +6,14 @@ import streamlit as st
 
 from frontend.api.base import friendly_api_error
 from frontend.api.job_client import JobClient
-from frontend.utils.auth_state import get_access_token, is_authenticated, with_auto_refresh
-from frontend.utils.session_state import navigate_to
+from frontend.components.ux_states import (
+    empty_state,
+    page_intro,
+    render_status_badge,
+    section_header,
+    success_banner,
+)
+from frontend.utils.auth_state import is_authenticated, with_auto_refresh
 from frontend.utils.workspace_api import get_api_client
 
 
@@ -20,21 +26,26 @@ def _error(exc: Exception) -> None:
 
 
 def render_job_monitor(client=None) -> None:
-    st.header("Job Monitor")
-    st.caption("Submit and track background jobs through the FastAPI `/api/v1/jobs` gateway.")
+    page_intro(
+        "Job Monitor",
+        "Submit and track background jobs through the FastAPI `/api/v1/jobs` gateway.",
+    )
 
     if not is_authenticated():
-        st.warning("Please sign in to manage jobs.")
-        if st.button("Go to Login", key="jobs_login"):
-            navigate_to("Login")
-            st.rerun()
+        empty_state(
+            "Sign in to manage jobs",
+            "Background jobs require an authenticated session.",
+            primary_label="Go to Login",
+            primary_page="Login",
+            key="jobs_login",
+        )
         return
 
     jobs = _client()
 
-    # Statistics
     try:
         stats = with_auto_refresh(lambda t: jobs.statistics(t)).get("statistics", {})
+        section_header("Queue health")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total", stats.get("total_jobs", 0))
         c2.metric("Queued", stats.get("queued_depth", 0))
@@ -44,7 +55,7 @@ def render_job_monitor(client=None) -> None:
         _error(exc)
 
     st.divider()
-    st.subheader("Submit a job")
+    section_header("Submit a job", "Choose a type and optional payload fields")
     with st.form("submit_job_form"):
         job_type = st.selectbox(
             "Job type",
@@ -75,25 +86,43 @@ def render_job_monitor(client=None) -> None:
                 lambda t: jobs.submit(t, job_type=job_type, payload=payload, priority=priority, inline=inline)
             )
             job = result.get("job", {})
-            st.success(f"Job {job.get('job_id')} — status {job.get('status')}")
+            success_banner(f"Job `{job.get('job_id')}` submitted")
+            render_status_badge(str(job.get("status") or "queued"), job.get("status"))
             st.session_state["last_job_id"] = job.get("job_id")
         except Exception as exc:
             _error(exc)
 
     st.divider()
-    st.subheader("Job history")
+    section_header("Job history", "Progress, cancel, and retry")
     only_mine = st.checkbox("Only my jobs", value=False)
     try:
         listing = with_auto_refresh(lambda t: jobs.list(t, mine=only_mine))
         job_list = listing.get("jobs", [])
-        st.write(f"{len(job_list)} job(s)")
+        st.caption(f"{len(job_list)} job(s)")
+        if not job_list:
+            empty_state(
+                "No jobs yet",
+                "Submit a job above to see progress and history here.",
+                key="jobs_empty",
+            )
+            return
         for job in job_list:
-            with st.expander(f"{job.get('job_type')} · {job.get('status')} · {job.get('job_id')}"):
+            status = str(job.get("status") or "pending")
+            header_cols = st.columns([4, 1])
+            with header_cols[0]:
+                st.markdown(
+                    f"**{job.get('job_type')}** · `{job.get('job_id')}`"
+                )
+            with header_cols[1]:
+                render_status_badge(status.replace("_", " ").title(), status)
+            with st.expander("Details", expanded=status in {"running", "queued", "pending", "retrying"}):
                 progress = job.get("progress", {}) or {}
-                st.progress(min(1.0, float(progress.get("percent", 0)) / 100.0))
-                st.caption(progress.get("message", ""))
+                pct = float(progress.get("percent", 0) or 0)
+                st.progress(min(1.0, pct / 100.0))
+                st.caption(progress.get("message", "") or f"{pct:.0f}% complete")
                 if job.get("result"):
-                    st.json(job["result"])
+                    with st.expander("Result JSON", expanded=False):
+                        st.json(job["result"])
                 if job.get("error"):
                     st.error(job["error"])
                 c1, c2 = st.columns(2)

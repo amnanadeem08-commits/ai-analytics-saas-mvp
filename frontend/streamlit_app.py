@@ -147,42 +147,44 @@ def _route_command(cmd: str) -> str | None:
 # ── Navigation rendering ──────────────────────────────────────────────────────
 
 _NAV_GROUPS: dict[str, list[tuple[str, str]]] = {
-    ":material/home: Home": [
-        ("Home", "Dashboard overview & quick actions"),
+    ":material/home: Start": [
+        ("Home", "Overview and guided workflow"),
     ],
-    ":material/smart_toy: AI Workspace": [
-        ("AI Analyst", "Natural-language analysis via /api/v1"),
-        ("Dataset Manager", "Upload and preview datasets"),
-        ("Workflow Monitor", "Inspect workflow executions"),
-        ("Knowledge Center", "Ingest and search knowledge"),
-        ("Evaluation Dashboard", "Scores, strengths, weaknesses"),
-        ("Session History", "Resume previous analyst sessions"),
-        ("Job Monitor", "Background jobs, progress, retries"),
-        ("Storage Manager", "Upload and manage stored artifacts"),
-        ("Dataset Versions", "Version history and rollback"),
-        ("Artifact Browser", "Browse artifacts by type"),
-        ("Storage Statistics", "Quota and storage usage"),
-    ],
-    ":material/folder: Data": [
+    ":material/upload_file: Get data": [
         ("Upload", "Upload a CSV or Excel file"),
-        ("Data Cleaning", "Fix nulls, duplicates, outliers"),
+        ("Dataset Manager", "Manage datasets via API"),
         ("Dataset Preview", "Explore and preview your data"),
+        ("Data Cleaning", "Fix nulls, duplicates, outliers"),
     ],
-    ":material/analytics: Analytics": [
+    ":material/analytics: Analyze": [
         ("Dashboard", "Statistical summary and KPI metrics"),
         ("Charts", "Distribution plots and correlations"),
         ("Business Analysis", "KPI trends and segment comparisons"),
         ("Pivot Tables", "Pivot table explorer"),
         ("Dashboard Studio", "Drag-and-drop visual builder"),
+        ("Location Insights", "Geographic and regional analysis"),
     ],
-    ":material/psychology: AI (Legacy)": [
+    ":material/psychology: AI insights": [
+        ("AI Analyst", "Natural-language analysis via /api/v1"),
         ("AI Chat", "Chat with your data in plain language"),
         ("AI Insights", "Anomalies, risks, and opportunities"),
+        ("Knowledge Center", "Ingest and search knowledge"),
+        ("Evaluation Dashboard", "Scores, strengths, weaknesses"),
+        ("Session History", "Resume previous analyst sessions"),
     ],
-    ":material/summarize: Reports": [
+    ":material/play_circle: Automate": [
+        ("Workflow Monitor", "Inspect workflow executions"),
+        ("Job Monitor", "Background jobs, progress, retries"),
+    ],
+    ":material/folder: Storage": [
+        ("Storage Manager", "Upload and manage stored artifacts"),
+        ("Dataset Versions", "Version history and rollback"),
+        ("Artifact Browser", "Browse artifacts by type"),
+        ("Storage Statistics", "Quota and storage usage"),
+    ],
+    ":material/summarize: Share": [
         ("Reports", "PDF & PowerPoint executive reports"),
         ("Storyboard", "Narrative slide deck for board review"),
-        ("Location Insights", "Geographic and regional analysis"),
     ],
     ":material/build: Advanced": [
         ("SQL Lab", "Write SQL queries on your dataset"),
@@ -195,15 +197,13 @@ _NAV_GROUPS: dict[str, list[tuple[str, str]]] = {
         ("Profile", "View and edit your profile"),
         ("Change Password", "Update your password"),
     ],
-    ":material/groups: Administration": [
+    ":material/admin_panel_settings: Admin": [
         ("Organizations", "Manage organizations"),
         ("Workspace Manager", "Create and manage workspaces"),
         ("Members", "Organization membership"),
         ("Invitations", "Invite and respond to invitations"),
         ("Roles", "Roles and role assignment"),
         ("Permissions", "Permissions and access checks"),
-    ],
-    ":material/payments: Commercial": [
         ("Billing Dashboard", "Estimates and invoices"),
         ("Usage Dashboard", "Organization usage metrics"),
         ("Subscription Management", "Plans, trials, limits"),
@@ -211,8 +211,6 @@ _NAV_GROUPS: dict[str, list[tuple[str, str]]] = {
         ("Organization Billing", "Generate invoices"),
         ("Admin Dashboard", "Platform admin overview"),
         ("System Analytics", "Commercial system stats"),
-    ],
-    ":material/monitor_heart: Operations": [
         ("System Health", "Liveness, readiness, health probes"),
         ("Metrics Dashboard", "Counters, gauges, timers"),
         ("Application Status", "Combined system status"),
@@ -387,14 +385,25 @@ def _render_pivot_placeholder(client) -> None:
 def main() -> None:
     initialize_session_state()
 
-    # ── Sidebar top: URL input + backend status ───────────────────────────
+    from frontend.components.ux_states import error_panel, inject_ux_css
+    from frontend.design_system import apply_design_system, ensure_session_palette
+
+    apply_design_system()
+    inject_ux_css()
+    ensure_session_palette()
+
+    # ── Sidebar top: connection (collapsed for non-technical users) ───────
     with st.sidebar:
-        api_base_url = st.text_input(
-            "Backend API URL",
-            value=st.session_state.get("api_base_url", DEFAULT_API_BASE_URL),
-            key="api_base_url_input",
-        )
-        st.session_state["api_base_url"] = api_base_url
+        with st.expander("Connection", expanded=False):
+            api_base_url = st.text_input(
+                "Backend API URL",
+                value=st.session_state.get("api_base_url", DEFAULT_API_BASE_URL),
+                key="api_base_url_input",
+                help="Usually leave as default unless your API runs on another host.",
+            )
+            st.session_state["api_base_url"] = api_base_url
+            render_backend_status(get_client(api_base_url))
+        api_base_url = st.session_state.get("api_base_url", DEFAULT_API_BASE_URL)
 
     client = get_client(api_base_url)
 
@@ -407,9 +416,6 @@ def main() -> None:
 
     _apply_branding_theme()
 
-    # ── Sidebar: backend status ───────────────────────────────────────────
-    render_backend_status(client)
-
     # ── Sidebar: navigation ───────────────────────────────────────────────
     current_page = st.session_state.get("current_page", "Home")
     _render_sidebar_nav(current_page)
@@ -421,7 +427,6 @@ def main() -> None:
     branding = st.session_state["branding"]
     company = branding.get("company_name", "AI Analytics")
 
-    # Show title only on non-Home pages (Home has its own hero section)
     if current_page != "Home":
         st.sidebar.caption(f"© {company}")
 
@@ -429,13 +434,14 @@ def main() -> None:
         _dispatch_page(current_page, client)
     except Exception as exc:
         import traceback
-        st.error(
-            f"An error occurred on the **{current_page}** page. "
-            "Other pages remain available.\n\n"
-            f"**Details:** {exc}"
+
+        error_panel(
+            f"Something went wrong on **{current_page}**. Your other pages still work.",
+            suggestion="Try Home, or Retry after checking the API connection.",
+            retry_key=f"page_err_retry_{current_page}",
         )
-        with st.expander("Technical details (for debugging)"):
-            st.code(traceback.format_exc())
+        with st.expander("Technical details (for debugging)", expanded=False):
+            st.code(f"{exc}\n\n{traceback.format_exc()}")
 
     if branding.get("footer_note"):
         st.caption(branding["footer_note"])

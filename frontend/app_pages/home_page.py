@@ -237,9 +237,63 @@ def _render_hero(branding: dict, conn_status: dict) -> None:
     )
 
 
+def _render_quick_actions() -> None:
+    from frontend.design_system.layout import section_header
+
+    section_header("Quick Actions", "Upload → prepare → analyze → insights → share")
+    cols = st.columns(5)
+    actions = [
+        ("1. Upload", "Upload"),
+        ("2. Clean", "Data Cleaning"),
+        ("3. Dashboard", "Dashboard"),
+        ("4. AI Analyst", "AI Analyst"),
+        ("5. Reports", "Reports"),
+    ]
+    for col, (label, page) in zip(cols, actions):
+        if col.button(label, use_container_width=True, key=f"home_qa_{page}"):
+            navigate_to(page)
+            st.rerun()
+
+
+def _render_workflow_guide() -> None:
+    from frontend.components.ux_states import workflow_stepper
+
+    st.markdown('<div class="home-section-title">Recommended Workflow</div>', unsafe_allow_html=True)
+    st.caption("Power BI–style path: get data → prepare → analyze → insights → share.")
+    ds_info = _active_dataset_info()
+    active = 0 if not ds_info else 2
+    workflow_stepper(active_index=active)
+    steps = [
+        ("1", "Upload data", "Upload"),
+        ("2", "Prepare / clean", "Data Cleaning"),
+        ("3", "Analyze KPIs", "Dashboard"),
+        ("4", "Ask AI", "AI Analyst"),
+        ("5", "Export report", "Reports"),
+    ]
+    for num, label, page in steps:
+        col1, col2 = st.columns([5, 1])
+        with col1:
+            st.markdown(
+                f'<div class="home-workflow-step"><b>{num}.</b> {_esc(label)}</div>',
+                unsafe_allow_html=True,
+            )
+        with col2:
+            if st.button("Go", key=f"home_wf_{num}", use_container_width=True):
+                navigate_to(page)
+                st.rerun()
+
+
 def _render_dataset_summary(ds_info: dict) -> None:
     if not ds_info:
-        st.info("No dataset is active yet. Upload a CSV or Excel file to begin.")
+        from frontend.components.ux_states import empty_state
+
+        empty_state(
+            "No dataset yet",
+            "Upload a CSV or Excel file to start analyzing — like opening a workbook in Excel or Power BI.",
+            primary_label="Upload a dataset",
+            primary_page="Upload",
+            key="home_empty_upload",
+        )
         return
 
     cards = [
@@ -253,44 +307,6 @@ def _render_dataset_summary(ds_info: dict) -> None:
         f'<div class="home-stat-grid">{"".join(cards)}</div>',
         unsafe_allow_html=True,
     )
-
-
-def _render_quick_actions() -> None:
-    st.markdown('<div class="home-section-title">Quick Actions</div>', unsafe_allow_html=True)
-    cols = st.columns(5)
-    actions = [
-        ("⬆️ Upload", "Upload"),
-        ("📊 Dashboard", "Dashboard"),
-        ("🤖 AI Analyst", "AI Analyst"),
-        ("📋 Reports", "Reports"),
-        ("📽️ Storyboard", "Storyboard"),
-    ]
-    for col, (label, page) in zip(cols, actions):
-        if col.button(label, use_container_width=True, key=f"home_qa_{page}"):
-            navigate_to(page)
-            st.rerun()
-
-
-def _render_workflow_guide() -> None:
-    st.markdown('<div class="home-section-title">Recommended Workflow</div>', unsafe_allow_html=True)
-    steps = [
-        ("1", "⬆️", "Upload Data", "Upload"),
-        ("2", "🔍", "Analyze", "Dashboard"),
-        ("3", "🤖", "Ask AI", "AI Analyst"),
-        ("4", "📊", "Dashboard", "Dashboard Studio"),
-        ("5", "📋", "Export Report", "Reports"),
-    ]
-    for num, icon, label, page in steps:
-        col1, col2 = st.columns([5, 1])
-        with col1:
-            st.markdown(
-                f'<div class="home-workflow-step"><b>{num}.</b> {icon} {_esc(label)}</div>',
-                unsafe_allow_html=True,
-            )
-        with col2:
-            if st.button("Go", key=f"home_wf_{num}", use_container_width=True):
-                navigate_to(page)
-                st.rerun()
 
 
 def _render_recent_datasets() -> None:
