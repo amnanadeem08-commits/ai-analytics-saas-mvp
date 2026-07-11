@@ -3,6 +3,7 @@ from __future__ import annotations
 """Storage provider factory with configuration-driven selection + safe fallback."""
 
 import logging
+import os
 
 from backend.storage.config import get_storage_config
 from backend.storage.interfaces import StorageBackend, StorageMetadataStore
@@ -14,6 +15,16 @@ _log = logging.getLogger("ai_analytics.storage")
 _backend: StorageBackend | None = None
 _metadata: StorageMetadataStore | None = None
 _active_provider: str = "local"
+
+
+def _is_production() -> bool:
+    profile = (
+        os.getenv("ENV_PROFILE")
+        or os.getenv("APP_ENV")
+        or os.getenv("ENVIRONMENT")
+        or ""
+    ).strip().lower()
+    return profile in {"production", "prod"}
 
 
 def build_backend() -> StorageBackend:
@@ -28,6 +39,9 @@ def build_backend() -> StorageBackend:
                 region=config.s3_region,
             )
         except Exception as exc:  # noqa: BLE001
+            if _is_production():
+                _log.error("S3 storage required in production but unavailable: %s", exc)
+                raise
             _log.warning("S3 storage unavailable (%s); falling back to local provider.", exc)
     config.root_dir.mkdir(parents=True, exist_ok=True)
     return LocalStorageProvider(config.root_dir)

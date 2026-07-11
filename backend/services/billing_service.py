@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Billing engine (Sprint 8.6) — internal invoicing, no payment gateway."""
+"""Billing engine — invoicing + payment gateway integration."""
 
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -13,6 +13,15 @@ from backend.models.billing_models import (
     InvoiceStatus,
     PaymentAttempt,
     PaymentAttemptStatus,
+)
+from backend.services.payment_gateway import (
+    CheckoutSession,
+    PaymentGatewayConfigError,
+    StripeGatewayError,
+    gateway_status,
+    get_payment_gateway,
+    get_payment_gateway_config,
+    reset_payment_gateway,
 )
 from backend.services.subscription_service import get_plan, get_subscription
 from backend.services.usage_service import aggregate_usage
@@ -34,9 +43,13 @@ class BillingError(Exception):
         self.status_code = status_code
 
 
-_INVOICES: dict[str, Invoice] = {}
-_CREDITS: dict[str, CreditBalance] = {}
-_PAYMENTS: dict[str, PaymentAttempt] = {}
+_CHECKOUT_SESSIONS: dict[str, CheckoutSession] = {}
+
+
+def _stores():
+    from backend.repositories.commercial_registry import get_commercial_stores
+
+    return get_commercial_stores()
 
 
 def _now_iso() -> str:
@@ -48,27 +61,38 @@ def _uid(prefix: str = "inv") -> str:
 
 
 def reset_billing() -> None:
-    global _INVOICES, _CREDITS, _PAYMENTS
-    _INVOICES = {}
-    _CREDITS = {}
-    _PAYMENTS = {}
+    global _CHECKOUT_SESSIONS
+    stores = _stores()
+    stores.invoices.clear()
+    stores.credits.clear()
+    stores.payments.clear()
+    _CHECKOUT_SESSIONS = {}
+    reset_payment_gateway()
 
 
 def get_credit_balance(organization_id: str) -> CreditBalance:
-    bal = _CREDITS.get(organization_id)
+    bal = _stores().credits.get(organization_id)
     if bal is None:
-        bal = CreditBalance(balance_id=_uid("cred"), organization_id=organization_id, balance_cents=0, updated_at=_now_iso())
-        _CREDITS[organization_id] = bal
+        bal = CreditBalance(
+            balance_id=_uid("cred"),
+            organization_id=organization_id,
+            balance_cents=0,
+            updated_at=_now_iso(),
+        )
+        _stores().credits.save(bal)
     return bal.model_copy(deep=True)
 
 
 def add_credit(organization_id: str, amount_cents: int) -> CreditBalance:
-    bal = _CREDITS.get(organization_id) or CreditBalance(
-        balance_id=_uid("cred"), organization_id=organization_id, balance_cents=0, updated_at=_now_iso()
+    bal = _stores().credits.get(organization_id) or CreditBalance(
+        balance_id=_uid("cred"),
+        organization_id=organization_id,
+        balance_cents=0,
+        updated_at=_now_iso(),
     )
     bal.balance_cents += int(amount_cents)
     bal.updated_at = _now_iso()
-    _CREDITS[organization_id] = bal.model_copy(deep=True)
+    _stores().credits.save(bal)
     return bal.model_copy(deep=True)
 
 
@@ -109,7 +133,11 @@ def generate_invoice(organization_id: str) -> Invoice:
     estimate = estimated_charges(organization_id)
     now = datetime.now(timezone.utc)
     period_start = sub.current_period_start if sub else _now_iso()
-    period_end = sub.current_period_end if sub else (now + timedelta(days=30)).isoformat().replace("+00:00", "Z")
+    period_end = (
+        sub.current_period_end
+        if sub
+        else (now + timedelta(days=30)).isoformat().replace("+00:00", "Z")
+    )
 
     items: list[InvoiceItem] = []
     plan = get_plan(estimate["plan_id"])
@@ -154,43 +182,208 @@ def generate_invoice(organization_id: str) -> Invoice:
         issued_at=_now_iso(),
         due_at=(now + timedelta(days=14)).isoformat().replace("+00:00", "Z"),
     )
-    _INVOICES[invoice.invoice_id] = invoice.model_copy(deep=True)
+    _stores().invoices.save(invoice)
     if credit_applied:
         add_credit(organization_id, -credit_applied)
     return invoice.model_copy(deep=True)
 
 
 def list_invoices(*, organization_id: str | None = None) -> list[Invoice]:
-    items = list(_INVOICES.values())
-    if organization_id:
-        items = [i for i in items if i.organization_id == organization_id]
-    return [i.model_copy(deep=True) for i in sorted(items, key=lambda x: x.issued_at, reverse=True)]
+    return _stores().invoices.list(organization_id=organization_id)
 
 
 def get_invoice(invoice_id: str) -> Invoice | None:
-    inv = _INVOICES.get(invoice_id)
-    return inv.model_copy(deep=True) if inv else None
+    return _stores().invoices.get(invoice_id)
 
 
-def record_payment_attempt(invoice_id: str, *, amount_cents: int | None = None) -> PaymentAttempt:
+def get_gateway_status() -> dict[str, Any]:
+    return gateway_status()
+
+
+def start_checkout(
+    invoice_id: str,
+    *,
+    success_url: str | None = None,
+    cancel_url: str | None = None,
+) -> CheckoutSession:
     invoice = get_invoice(invoice_id)
     if invoice is None:
         raise BillingError(f"Invoice not found: {invoice_id}", status_code=404)
-    amount = amount_cents if amount_cents is not None else invoice.total_cents
+    if invoice.status == InvoiceStatus.paid:
+        raise BillingError("Invoice is already paid", status_code=409)
+    if invoice.status not in {InvoiceStatus.open, InvoiceStatus.overdue, InvoiceStatus.draft}:
+        raise BillingError(
+            f"Invoice status does not allow checkout: {invoice.status.value}",
+            status_code=409,
+        )
+
+    config = get_payment_gateway_config()
+    try:
+        gateway = get_payment_gateway()
+    except PaymentGatewayConfigError as exc:
+        raise BillingError(exc.message, status_code=exc.status_code) from exc
+
+    try:
+        session = gateway.create_checkout(
+            invoice_id=invoice.invoice_id,
+            organization_id=invoice.organization_id,
+            amount_cents=invoice.total_cents,
+            currency=invoice.currency,
+            success_url=success_url or config.default_success_url,
+            cancel_url=cancel_url or config.default_cancel_url,
+            description=f"Data Bot AI invoice {invoice.invoice_id}",
+            metadata={"invoice_id": invoice.invoice_id, "organization_id": invoice.organization_id},
+        )
+    except StripeGatewayError as exc:
+        raise BillingError(exc.message, status_code=exc.status_code) from exc
+
+    _CHECKOUT_SESSIONS[session.session_id] = session
+
+    if session.status == "succeeded":
+        _mark_invoice_paid(
+            invoice.invoice_id,
+            amount_cents=invoice.total_cents,
+            provider=gateway.name,
+            provider_reference=session.provider_reference,
+            metadata={"checkout_session_id": session.session_id, "path": "checkout_auto_complete"},
+        )
+    else:
+        attempt = PaymentAttempt(
+            attempt_id=_uid("pay"),
+            invoice_id=invoice.invoice_id,
+            organization_id=invoice.organization_id,
+            amount_cents=invoice.total_cents,
+            status=PaymentAttemptStatus.pending,
+            provider=gateway.name,
+            created_at=_now_iso(),
+            metadata={
+                "checkout_session_id": session.session_id,
+                "checkout_url": session.checkout_url,
+            },
+        )
+        _stores().payments.save(attempt)
+
+    return session
+
+
+def handle_payment_webhook(*, provider: str, headers: dict[str, str], body: bytes) -> dict[str, Any]:
+    provider_name = (provider or "").strip().lower()
+    if provider_name != "stripe":
+        raise BillingError(f"Unsupported webhook provider: {provider}", status_code=400)
+
+    try:
+        from backend.services.payment_gateway.stripe_gateway import StripePaymentGateway
+
+        gateway = StripePaymentGateway(get_payment_gateway_config())
+        event = gateway.verify_webhook(headers=headers, body=body)
+    except StripeGatewayError as exc:
+        raise BillingError(exc.message, status_code=exc.status_code) from exc
+
+    if not event.paid:
+        return {
+            "success": True,
+            "handled": False,
+            "event_type": event.event_type,
+            "reason": "not_a_paid_event",
+        }
+
+    if not event.invoice_id:
+        raise BillingError("Webhook missing invoice_id / client_reference_id", status_code=400)
+
+    invoice = get_invoice(event.invoice_id)
+    if invoice is None:
+        raise BillingError(f"Invoice not found for webhook: {event.invoice_id}", status_code=404)
+
+    if invoice.status != InvoiceStatus.paid:
+        _mark_invoice_paid(
+            invoice.invoice_id,
+            amount_cents=event.amount_cents or invoice.total_cents,
+            provider="stripe",
+            provider_reference=event.provider_reference,
+            metadata={"event_type": event.event_type, "path": "webhook"},
+        )
+
+    return {
+        "success": True,
+        "handled": True,
+        "event_type": event.event_type,
+        "invoice_id": event.invoice_id,
+        "provider_reference": event.provider_reference,
+    }
+
+
+def record_payment_attempt(invoice_id: str, *, amount_cents: int | None = None) -> PaymentAttempt:
+    """Backward-compatible settlement helper via configured payment gateway."""
+    invoice = get_invoice(invoice_id)
+    if invoice is None:
+        raise BillingError(f"Invoice not found: {invoice_id}", status_code=404)
+
+    if amount_cents is not None and amount_cents != invoice.total_cents:
+        inv = _stores().invoices.get(invoice_id)
+        if inv is None:
+            raise BillingError(f"Invoice not found: {invoice_id}", status_code=404)
+        inv.total_cents = int(amount_cents)
+        _stores().invoices.save(inv)
+
+    session = start_checkout(invoice_id)
+    if session.status != "succeeded":
+        return PaymentAttempt(
+            attempt_id=_uid("pay"),
+            invoice_id=invoice_id,
+            organization_id=invoice.organization_id,
+            amount_cents=session.amount_cents,
+            status=PaymentAttemptStatus.pending,
+            provider=session.provider,
+            created_at=_now_iso(),
+            metadata={
+                "checkout_session_id": session.session_id,
+                "checkout_url": session.checkout_url,
+            },
+        )
+
+    for attempt in _stores().payments.list(invoice_id=invoice_id):
+        if attempt.status == PaymentAttemptStatus.succeeded:
+            return attempt.model_copy(deep=True)
+
+    return _mark_invoice_paid(
+        invoice_id,
+        amount_cents=session.amount_cents,
+        provider=session.provider,
+        provider_reference=session.provider_reference,
+        metadata={"checkout_session_id": session.session_id},
+    )
+
+
+def _mark_invoice_paid(
+    invoice_id: str,
+    *,
+    amount_cents: int,
+    provider: str,
+    provider_reference: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> PaymentAttempt:
+    invoice = _stores().invoices.get(invoice_id)
+    if invoice is None:
+        raise BillingError(f"Invoice not found: {invoice_id}", status_code=404)
+
     attempt = PaymentAttempt(
         attempt_id=_uid("pay"),
         invoice_id=invoice_id,
         organization_id=invoice.organization_id,
-        amount_cents=amount,
+        amount_cents=amount_cents,
         status=PaymentAttemptStatus.succeeded,
-        provider="internal",
+        provider=provider,
         created_at=_now_iso(),
         completed_at=_now_iso(),
-        metadata={"note": "Internal billing — no external gateway"},
+        metadata={**(metadata or {}), "provider_reference": provider_reference},
     )
-    _PAYMENTS[attempt.attempt_id] = attempt.model_copy(deep=True)
-    inv = _INVOICES[invoice_id]
-    inv.status = InvoiceStatus.paid
-    inv.paid_at = _now_iso()
-    _INVOICES[invoice_id] = inv.model_copy(deep=True)
+    _stores().payments.save(attempt)
+    invoice.status = InvoiceStatus.paid
+    invoice.paid_at = _now_iso()
+    invoice.metadata = {
+        **dict(invoice.metadata or {}),
+        "payment_provider": provider,
+        "provider_reference": provider_reference,
+    }
+    _stores().invoices.save(invoice)
     return attempt.model_copy(deep=True)

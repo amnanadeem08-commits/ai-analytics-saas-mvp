@@ -17,3 +17,6 @@ python-pptx==1.0.2
 Pillow==11.3.0
 kaleido==1.2.0
 matplotlib==3.10.3
+# Optional: enables S3 / S3-compatible object storage (STORAGE_BACKEND=s3).
+# Falls back to local filesystem when S3 is unavailable outside production.
+boto3==1.38.27

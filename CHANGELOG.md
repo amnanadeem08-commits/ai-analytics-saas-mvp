@@ -2,6 +2,21 @@
 
 All notable changes to Data Bot AI are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Production S3 object storage provider (boto3) with MinIO/LocalStack endpoint support
+- `OBJECT_STORAGE_BACKEND` env (avoids collision with DB `STORAGE_BACKEND`)
+- Persistent commercial stores (SQLAlchemy) for billing/subscriptions/usage/API keys
+- Payment gateway (internal + Stripe) with checkout and webhook settlement
+- Phase 0.3: AI Business Column Suggestions (local session recipe registry + Dataset UI + unit tests)
+- Project Intelligence Operating System (`pios/`) as agent control plane
+
+### Changed
+
+- Production fail-fast when S3 is selected but misconfigured; non-prod falls back to local FS
+
 ## [1.0.0] — 2026-07-10
 
 ### Official Production Release

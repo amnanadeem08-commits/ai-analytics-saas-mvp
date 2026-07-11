@@ -47,3 +47,25 @@ class BillingClient:
 
     def list_invoices(self, token: str, organization_id: str) -> dict[str, Any]:
         return self._client.get(self._client.v1(f"/billing/invoices/{organization_id}"), headers=self._auth(token))
+
+    def gateway_status(self, token: str) -> dict[str, Any]:
+        return self._client.get(self._client.v1("/billing/gateway/status"), headers=self._auth(token))
+
+    def start_checkout(
+        self,
+        token: str,
+        invoice_id: str,
+        *,
+        success_url: str | None = None,
+        cancel_url: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if success_url:
+            payload["success_url"] = success_url
+        if cancel_url:
+            payload["cancel_url"] = cancel_url
+        return self._client.post(
+            self._client.v1(f"/billing/payments/{invoice_id}/checkout"),
+            json=payload,
+            headers=self._auth(token),
+        )

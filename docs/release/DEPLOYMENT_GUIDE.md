@@ -15,7 +15,8 @@ Copy `docker/.env.example` or set:
 | `JWT_SECRET` | ≥32 char signing secret (required in production) |
 | `DATABASE_URL` | `sqlite:///./data/app.db` or PostgreSQL URL |
 | `QUEUE_BACKEND` | `memory` or `redis` |
-| `STORAGE_BACKEND` | `local` or `s3` |
+| `STORAGE_BACKEND` | DB store: `memory`, `sqlite`, or `postgres` |
+| `OBJECT_STORAGE_BACKEND` | Files: `local` or `s3` (+ `S3_BUCKET` / AWS creds) |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated origins |
 | `RATE_LIMIT_REQUESTS` | Requests per window (default 120) |
 | `CSRF_ENABLED` | `true` for browser cookie flows |

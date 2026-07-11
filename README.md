@@ -9,6 +9,7 @@ A local-first AI Analytics SaaS platform built with:
 - AI layer: AI Analyst runtime (planning, tools, memory, RAG, evaluation)
 
 **Official release:** `v1.0.0`  
+**PIOS (agent operating system):** [`pios/README.md`](pios/README.md) · [`AGENTS.md`](AGENTS.md)  
 **Engineering Handbook:** [`documentation/README.md`](documentation/README.md)
 
 This product supports CSV/Excel upload, validation, preview, executive dashboards, KPI cards, Plotly charts, business insights, SQL/DAX workbenches, AI analyst workflows, multi-tenant auth/RBAC, jobs, monitoring, and export-ready PDF/PPTX/XLSX/PNG reports.

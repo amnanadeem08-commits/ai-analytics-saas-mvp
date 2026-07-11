@@ -31,3 +31,4 @@ data/*.db
 *.db
 output/
 tmp/
+.cursor/

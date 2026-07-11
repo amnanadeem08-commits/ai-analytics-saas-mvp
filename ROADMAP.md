@@ -1,5 +1,7 @@
 # ROADMAP
 
+> **Mirror.** Canonical roadmap: [`pios/01_vision/ROADMAP.md`](pios/01_vision/ROADMAP.md)
+
 ## Released — v1.0.0
 
 Stable production MVP covering analytics, AI analyst runtime, workflows, storage, monitoring, commercial controls, and production hardening.
@@ -22,13 +24,19 @@ Not allowed:
 
 Planned on `main` after v1.0.0:
 
-1. **Billing gateway** — live payment provider integration
-2. **Persistent commercial stores** — migrate in-memory billing/API-key stores to SQL
-3. **S3 object storage** — production S3 provider beyond the stub
-4. **Kubernetes / multi-node** — optional container orchestration profiles
-5. **Enterprise SSO / IdP** — SAML/OIDC integrations
-6. **Advanced forecasting plugins** — expanded model adapters
-7. **UI polish** — incremental Streamlit UX improvements (no redesign required for 1.x)
+3. [x] **S3 object storage** — production S3 provider beyond the stub (**complete 2026-07-11**)
+4. [ ] **Kubernetes / multi-node** — optional container orchestration profiles
+5. [ ] **Enterprise SSO / IdP** — SAML/OIDC integrations
+6. [ ] **Advanced forecasting plugins** — expanded model adapters
+7. [ ] **UI polish** — incremental Streamlit UX improvements (no redesign required for 1.x)
+
+## Near-term engineering (active)
+
+- [x] Phase 0.3: AI Business Column Suggestions — complete 2026-07-11
+- [x] Billing gateway — complete 2026-07-11
+- [x] Persistent commercial stores — complete 2026-07-11
+- [x] S3 object storage — complete 2026-07-11
+- [ ] Next: Kubernetes or Enterprise SSO — see [`pios/01_vision/ROADMAP.md`](pios/01_vision/ROADMAP.md)
 
 ## Principles
 

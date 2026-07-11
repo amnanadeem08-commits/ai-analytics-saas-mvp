@@ -2,6 +2,8 @@
 
 **Official documentation package** for Data Bot AI version **1.0.0**.
 
+**Agents / Cursor:** start with the Project Intelligence Operating System — [`../pios/README.md`](../pios/README.md) and [`../AGENTS.md`](../AGENTS.md). This handbook is the deep reference; PIOS is the live control plane.
+
 This handbook is simultaneously:
 
 | Role | Audience |
@@ -52,6 +54,7 @@ See [19 Formats](19_formats/README.md) and `scripts/export_handbook.py`.
 
 ```
 ai-analytics-saas-mvp/
+├── pios/             # Project Intelligence Operating System (agent SSOT)
 ├── backend/          # FastAPI application
 ├── frontend/         # Streamlit UI
 ├── tests/            # pytest suite

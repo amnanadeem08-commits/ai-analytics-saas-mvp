@@ -12,11 +12,23 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _resolve_object_backend() -> str:
+    """Prefer OBJECT_STORAGE_BACKEND; avoid colliding with DB STORAGE_BACKEND values."""
+    explicit = os.getenv("OBJECT_STORAGE_BACKEND", "").strip().lower()
+    if explicit:
+        return explicit
+    raw = os.getenv("STORAGE_BACKEND", "local").strip().lower()
+    if raw in {"local", "s3", "aws"}:
+        return raw
+    # STORAGE_BACKEND may be memory/sqlite/postgres for DB — keep files local.
+    return "local"
+
+
 @dataclass
 class StorageConfig:
-    """Environment-driven storage configuration."""
+    """Environment-driven object storage configuration."""
 
-    backend: str = field(default_factory=lambda: os.getenv("STORAGE_BACKEND", "local").strip().lower())
+    backend: str = field(default_factory=_resolve_object_backend)
     root_dir: Path = field(
         default_factory=lambda: Path(os.getenv("STORAGE_ROOT_DIR", "")).expanduser()
         if os.getenv("STORAGE_ROOT_DIR")

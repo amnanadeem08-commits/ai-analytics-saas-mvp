@@ -32,23 +32,30 @@ def test_local_provider_list_keys(tmp_path):
     assert "prefix/two.bin" in keys
 
 
-def test_s3_stub_requires_bucket():
+def test_s3_requires_bucket():
     with pytest.raises(S3NotConfiguredError):
         S3StorageProvider(bucket="")
 
 
-def test_s3_stub_write_raises():
-    provider = S3StorageProvider(bucket="test-bucket")
-    with pytest.raises(S3NotConfiguredError):
-        provider.write("k", b"v")
-
-
-def test_factory_falls_back_to_local(monkeypatch):
-    monkeypatch.setenv("STORAGE_BACKEND", "s3")
+def test_factory_falls_back_to_local_when_s3_misconfigured(monkeypatch):
+    monkeypatch.setenv("OBJECT_STORAGE_BACKEND", "s3")
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("ENV_PROFILE", raising=False)
     reset_storage_config()
     reset_storage_backends()
     backend = build_backend()
     assert isinstance(backend, LocalStorageProvider)
+
+
+def test_factory_raises_in_production_when_s3_misconfigured(monkeypatch):
+    monkeypatch.setenv("OBJECT_STORAGE_BACKEND", "s3")
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    monkeypatch.setenv("APP_ENV", "production")
+    reset_storage_config()
+    reset_storage_backends()
+    with pytest.raises(Exception):
+        build_backend()
 
 
 def test_metadata_store_find_by_checksum():

@@ -53,6 +53,32 @@ def test_usage_and_invoice_api():
     assert invoice.status_code == 201
 
 
+def test_gateway_status_and_checkout_api():
+    headers = _auth()
+    status = client.get("/api/v1/billing/gateway/status", headers=headers)
+    assert status.status_code == 200
+    assert status.json()["gateway"]["active_provider"] == "internal"
+
+    client.post(f"/api/v1/billing/subscriptions/{ORG}", json={"plan_id": "pro"}, headers=headers)
+    invoice = client.post(f"/api/v1/billing/invoices/{ORG}", headers=headers)
+    assert invoice.status_code == 201
+    invoice_id = invoice.json()["invoice"]["invoice_id"]
+
+    checkout = client.post(
+        f"/api/v1/billing/payments/{invoice_id}/checkout",
+        json={},
+        headers=headers,
+    )
+    assert checkout.status_code == 201
+    body = checkout.json()["checkout"]
+    assert body["provider"] == "internal"
+    assert body["status"] == "succeeded"
+
+    detail = client.get(f"/api/v1/billing/invoices/detail/{invoice_id}", headers=headers)
+    assert detail.status_code == 200
+    assert detail.json()["invoice"]["status"] == "paid"
+
+
 def test_api_key_api_lifecycle():
     headers = _auth()
     created = client.post(

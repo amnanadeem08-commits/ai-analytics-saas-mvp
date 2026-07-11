@@ -16,8 +16,13 @@ class UsageError(Exception):
         self.status_code = status_code
 
 
-_USAGE_STORE: list[UsageRecord] = []
 _RATE_BUCKETS: dict[str, list[float]] = {}
+
+
+def _usage():
+    from backend.repositories.commercial_registry import get_commercial_stores
+
+    return get_commercial_stores().usage
 
 
 def _now_iso() -> str:
@@ -29,8 +34,8 @@ def _uid() -> str:
 
 
 def reset_usage() -> None:
-    global _USAGE_STORE, _RATE_BUCKETS
-    _USAGE_STORE = []
+    global _RATE_BUCKETS
+    _usage().clear()
     _RATE_BUCKETS = {}
 
 
@@ -64,7 +69,7 @@ def record_usage(
         recorded_at=_now_iso(),
         metadata=dict(metadata or {}),
     )
-    _USAGE_STORE.append(record.model_copy(deep=True))
+    _usage().add(record)
     return record
 
 
@@ -75,16 +80,12 @@ def list_usage(
     user_id: str | None = None,
     metric: str | None = None,
 ) -> list[UsageRecord]:
-    items = list(_USAGE_STORE)
-    if organization_id:
-        items = [r for r in items if r.organization_id == organization_id]
-    if workspace_id:
-        items = [r for r in items if r.workspace_id == workspace_id]
-    if user_id:
-        items = [r for r in items if r.user_id == user_id]
-    if metric:
-        items = [r for r in items if r.metric == metric or str(r.metric) == metric]
-    return [r.model_copy(deep=True) for r in items]
+    return _usage().list(
+        organization_id=organization_id,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        metric=metric,
+    )
 
 
 def aggregate_usage(

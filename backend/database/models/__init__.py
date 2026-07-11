@@ -11,6 +11,14 @@ ORM models are intentionally separate from the Pydantic domain models and are
 never imported by services.
 """
 
+from backend.database.models.commercial import (
+    ApiKeyORM,
+    CreditBalanceORM,
+    InvoiceORM,
+    PaymentAttemptORM,
+    SubscriptionORM,
+    UsageRecordORM,
+)
 from backend.database.models.auth import (
     EmailVerificationORM,
     PasswordResetRequestORM,
@@ -54,4 +62,10 @@ __all__ = [
     "AnalystSessionORM",
     "KnowledgeDocumentORM",
     "KnowledgeChunkORM",
+    "SubscriptionORM",
+    "InvoiceORM",
+    "CreditBalanceORM",
+    "PaymentAttemptORM",
+    "UsageRecordORM",
+    "ApiKeyORM",
 ]

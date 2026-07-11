@@ -1,0 +1,112 @@
+# PIOS machine index — Data Bot AI
+product: Data Bot AI
+repo_name: ai-analytics-saas-mvp
+canonical_version_source: backend/core/config.py#API_VERSION
+handbook: documentation/
+adrs: docs/architecture/
+release_gates: release/v1.0/RELEASE_GATES.md
+
+modules:
+  vision:
+    path: pios/01_vision
+    owners: [product, engineering]
+  architecture:
+    path: pios/02_architecture
+    owners: [architecture, engineering]
+  standards:
+    path: pios/03_standards
+    owners: [engineering, qa]
+  sprints:
+    path: pios/04_sprints
+    owners: [engineering]
+  status:
+    path: pios/05_status
+    owners: [engineering]
+    live_files:
+      - PROJECT_STATUS.md
+      - TECHNICAL_DEBT.md
+      - KNOWN_ISSUES.md
+  prompts:
+    path: pios/06_prompts
+    owners: [engineering]
+  releases:
+    path: pios/07_releases
+    owners: [engineering, ops]
+  knowledge:
+    path: pios/08_knowledge
+    owners: [architecture]
+  docs:
+    path: pios/09_docs
+    owners: [engineering]
+
+packages:
+  backend:
+    - api
+    - services
+    - models
+    - repositories
+    - storage
+    - queue
+    - jobs
+    - workers
+    - rag
+    - ai
+    - registry
+    - monitoring
+    - logging
+    - security
+    - reliability
+    - performance
+    - database
+    - core
+    - config
+  frontend:
+    - app_pages
+    - api
+    - api_client
+    - components
+    - utils
+    - services
+
+dependency_rules:
+  - id: FE_NO_BACKEND_SERVICES
+    description: frontend must not import backend.services
+    forbidden_import: backend.services
+    scoped_to: frontend/
+  - id: FE_NO_BACKEND_REPOS
+    description: frontend must not import backend.repositories
+    forbidden_import: backend.repositories
+    scoped_to: frontend/
+  - id: SERVICES_NO_STREAMLIT
+    description: backend services must not import streamlit
+    forbidden_import: streamlit
+    scoped_to: backend/services/
+  - id: SERVICES_NO_FRONTEND
+    description: backend must not import frontend packages
+    forbidden_import: frontend
+    scoped_to: backend/
+  - id: ROUTES_THIN
+    description: route modules should prefer services over direct repository imports
+    advisory: true
+    forbidden_import: backend.repositories
+    scoped_to: backend/api/routes/
+    severity: warning
+
+keyword_module_map:
+  billing: [backend/services, backend/api/routes, documentation/18_release]
+  auth: [backend/security, backend/api/routes, frontend/app_pages]
+  rag: [backend/rag, backend/services, documentation/08_ai]
+  storage: [backend/storage, documentation/10_database]
+  cleaning: [backend/services, frontend/app_pages, frontend/utils]
+  dashboard: [backend/services, frontend/app_pages, backend/registry]
+  export: [backend/services, frontend]
+  jobs: [backend/jobs, backend/queue, backend/workers]
+  monitoring: [backend/monitoring, backend/logging]
+
+doc_update_hints:
+  architecture: [pios/02_architecture, documentation/02_architecture, docs/architecture]
+  api: [documentation/09_api, docs/release/API_GUIDE.md]
+  ai: [documentation/08_ai, pios/02_architecture/AI_WORKFLOW.md]
+  frontend: [documentation/11_frontend]
+  release: [pios/07_releases, documentation/18_release, release/]
+  testing: [documentation/13_testing, pios/03_standards/TESTING.md]

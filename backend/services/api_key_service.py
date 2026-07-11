@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""API key service (Sprint 8.6)."""
+"""API key service (Sprint 8.6) — commercial ApiKeyStore backed."""
 
 import secrets
 import time
@@ -23,8 +23,10 @@ class ApiKeyError(Exception):
         self.status_code = status_code
 
 
-_KEYS: dict[str, ApiKey] = {}
-_KEY_BY_HASH: dict[str, str] = {}
+def _keys():
+    from backend.repositories.commercial_registry import get_commercial_stores
+
+    return get_commercial_stores().api_keys
 
 
 def _now_iso() -> str:
@@ -36,9 +38,8 @@ def _uid() -> str:
 
 
 def reset_api_keys() -> None:
-    global _KEYS, _KEY_BY_HASH, _RATE_LIMIT_STORE
-    _KEYS = {}
-    _KEY_BY_HASH = {}
+    global _RATE_LIMIT_STORE
+    _keys().clear()
     _RATE_LIMIT_STORE = {}
 
 
@@ -77,8 +78,7 @@ def create_key(
         expires_at=expires_at,
         created_at=_now_iso(),
     )
-    _KEYS[key.key_id] = key.model_copy(deep=True)
-    _KEY_BY_HASH[key_hash] = key.key_id
+    _keys().save(key)
     return key.model_copy(deep=True), raw
 
 
@@ -88,33 +88,30 @@ def list_keys(
     workspace_id: str | None = None,
     created_by: str | None = None,
 ) -> list[ApiKey]:
-    items = list(_KEYS.values())
-    if organization_id:
-        items = [k for k in items if k.organization_id == organization_id]
+    items = _keys().list(organization_id=organization_id)
     if workspace_id:
         items = [k for k in items if k.workspace_id == workspace_id]
     if created_by:
         items = [k for k in items if k.created_by == created_by]
-    return [k.model_copy(deep=True) for k in sorted(items, key=lambda x: x.created_at, reverse=True)]
+    return items
 
 
 def get_key(key_id: str) -> ApiKey | None:
-    key = _KEYS.get(key_id)
-    return key.model_copy(deep=True) if key else None
+    return _keys().get(key_id)
 
 
 def revoke_key(key_id: str) -> ApiKey:
-    key = _KEYS.get(key_id)
+    key = _keys().get(key_id)
     if key is None:
         raise ApiKeyError(f"API key not found: {key_id}", status_code=404)
     key.status = ApiKeyStatus.revoked
     key.revoked_at = _now_iso()
-    _KEYS[key_id] = key.model_copy(deep=True)
+    _keys().save(key)
     return key.model_copy(deep=True)
 
 
 def rotate_key(key_id: str, *, rotated_by: str) -> tuple[ApiKey, str]:
-    old = _KEYS.get(key_id)
+    old = _keys().get(key_id)
     if old is None:
         raise ApiKeyError(f"API key not found: {key_id}", status_code=404)
     revoke_key(key_id)
@@ -126,9 +123,10 @@ def rotate_key(key_id: str, *, rotated_by: str) -> tuple[ApiKey, str]:
         scopes=list(old.scopes),
         rate_limit_per_minute=old.rate_limit_per_minute,
     )
-    new = _KEYS[new_key.key_id]
+    new = _keys().get(new_key.key_id)
+    assert new is not None
     new.rotated_from = key_id
-    _KEYS[new_key.key_id] = new.model_copy(deep=True)
+    _keys().save(new)
     return new.model_copy(deep=True), raw
 
 
@@ -136,19 +134,18 @@ def authenticate_key(raw_key: str) -> ApiKey:
     if not raw_key or not raw_key.startswith(API_KEY_PREFIX):
         raise ApiKeyError("Invalid API key", status_code=401)
     key_hash = hash_token(raw_key)
-    key_id = _KEY_BY_HASH.get(key_hash)
-    if not key_id:
+    key = _keys().get_by_hash(key_hash)
+    if key is None:
         raise ApiKeyError("Invalid API key", status_code=401)
-    key = _KEYS[key_id]
     if key.status != ApiKeyStatus.active:
         raise ApiKeyError("API key revoked or inactive", status_code=401)
     if key.expires_at and key.expires_at < _now_iso():
         key.status = ApiKeyStatus.expired
-        _KEYS[key_id] = key
+        _keys().save(key)
         raise ApiKeyError("API key expired", status_code=401)
     _enforce_rate_limit(key)
     key.last_used_at = _now_iso()
-    _KEYS[key_id] = key.model_copy(deep=True)
+    _keys().save(key)
     return key.model_copy(deep=True)
 
 

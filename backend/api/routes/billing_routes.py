@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.api.auth_dependencies import current_organization, get_current_user_dependency
@@ -27,6 +27,13 @@ class AddCreditRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     amount_cents: int = Field(..., ge=1)
+
+
+class CheckoutRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    success_url: str | None = None
+    cancel_url: str | None = None
 
 
 def _handle(exc: Exception):
@@ -244,3 +251,87 @@ def add_credit(
     _ = current_user
     bal = billing_service.add_credit(organization_id, request.amount_cents)
     return {"success": True, "credit": bal.model_dump()}
+
+
+@router.get("/gateway/status", summary="Payment gateway status")
+def payment_gateway_status(
+    current_user: User = Depends(get_current_user_dependency),
+) -> dict[str, Any]:
+    _ = current_user
+    return {"success": True, "gateway": billing_service.get_gateway_status()}
+
+
+@router.post(
+    "/payments/{invoice_id}/checkout",
+    status_code=status.HTTP_201_CREATED,
+    summary="Start payment checkout for an invoice",
+)
+def start_invoice_checkout(
+    invoice_id: str,
+    request: CheckoutRequest | None = None,
+    current_user: User = Depends(get_current_user_dependency),
+) -> dict[str, Any]:
+    _ = current_user
+    body = request or CheckoutRequest()
+    try:
+        session = billing_service.start_checkout(
+            invoice_id,
+            success_url=body.success_url,
+            cancel_url=body.cancel_url,
+        )
+        return {
+            "success": True,
+            "checkout": {
+                "session_id": session.session_id,
+                "provider": session.provider,
+                "invoice_id": session.invoice_id,
+                "organization_id": session.organization_id,
+                "amount_cents": session.amount_cents,
+                "currency": session.currency,
+                "status": session.status,
+                "checkout_url": session.checkout_url,
+                "provider_reference": session.provider_reference,
+                "metadata": session.metadata,
+            },
+        }
+    except Exception as exc:
+        _handle(exc)
+
+
+@router.post(
+    "/payments/{invoice_id}/pay",
+    summary="Record / settle payment attempt (gateway-aware)",
+)
+def pay_invoice(
+    invoice_id: str,
+    current_user: User = Depends(get_current_user_dependency),
+) -> dict[str, Any]:
+    _ = current_user
+    try:
+        attempt = billing_service.record_payment_attempt(invoice_id)
+        invoice = billing_service.get_invoice(invoice_id)
+        return {
+            "success": True,
+            "payment": attempt.model_dump(),
+            "invoice": invoice.model_dump() if invoice else None,
+        }
+    except Exception as exc:
+        _handle(exc)
+
+
+@router.post("/webhooks/{provider}", summary="Payment provider webhook", include_in_schema=True)
+async def payment_webhook(provider: str, request: Request) -> dict[str, Any]:
+    body = await request.body()
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    # Preserve Stripe-Signature casing lookup helpers inside gateway
+    if "stripe-signature" in headers:
+        headers["Stripe-Signature"] = headers["stripe-signature"]
+    try:
+        result = billing_service.handle_payment_webhook(
+            provider=provider,
+            headers=headers,
+            body=body,
+        )
+        return result
+    except Exception as exc:
+        _handle(exc)

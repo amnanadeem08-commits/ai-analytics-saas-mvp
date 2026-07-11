@@ -85,7 +85,12 @@ class SubscriptionError(Exception):
 
 
 _PLANS: dict[str, SubscriptionPlan] = {p.plan_id: p.model_copy(deep=True) for p in DEFAULT_PLANS}
-_SUBSCRIPTIONS: dict[str, Subscription] = {}
+
+
+def _subs():
+    from backend.repositories.commercial_registry import get_commercial_stores
+
+    return get_commercial_stores().subscriptions
 
 
 def _now() -> datetime:
@@ -101,9 +106,9 @@ def _uid() -> str:
 
 
 def reset_subscriptions() -> None:
-    global _PLANS, _SUBSCRIPTIONS
+    global _PLANS
     _PLANS = {p.plan_id: p.model_copy(deep=True) for p in DEFAULT_PLANS}
-    _SUBSCRIPTIONS = {}
+    _subs().clear()
 
 
 def list_plans(*, active_only: bool = True) -> list[SubscriptionPlan]:
@@ -152,13 +157,12 @@ def assign_plan(
         created_at=_now_iso(),
         updated_at=_now_iso(),
     )
-    _SUBSCRIPTIONS[organization_id] = sub.model_copy(deep=True)
+    _subs().save(sub)
     return sub.model_copy(deep=True)
 
 
 def get_subscription(organization_id: str) -> Subscription | None:
-    sub = _SUBSCRIPTIONS.get(organization_id)
-    return sub.model_copy(deep=True) if sub else None
+    return _subs().get(organization_id)
 
 
 def upgrade_plan(organization_id: str, new_plan_id: str, *, start_trial: bool = False) -> Subscription:
@@ -175,7 +179,7 @@ def upgrade_plan(organization_id: str, new_plan_id: str, *, start_trial: bool = 
         sub.trial_end = (_now() + timedelta(days=plan.trial_days)).isoformat().replace("+00:00", "Z")
     elif sub.status == SubscriptionStatus.suspended:
         sub.status = SubscriptionStatus.active
-    _SUBSCRIPTIONS[organization_id] = sub.model_copy(deep=True)
+    _subs().save(sub)
     return sub.model_copy(deep=True)
 
 
@@ -191,7 +195,7 @@ def suspend_subscription(organization_id: str, *, reason: str = "") -> Subscript
     sub.suspended_at = _now_iso()
     sub.metadata = {**sub.metadata, "suspend_reason": reason}
     sub.updated_at = _now_iso()
-    _SUBSCRIPTIONS[organization_id] = sub.model_copy(deep=True)
+    _subs().save(sub)
     return sub.model_copy(deep=True)
 
 
@@ -202,7 +206,7 @@ def reactivate_subscription(organization_id: str) -> Subscription:
     sub.status = SubscriptionStatus.active
     sub.suspended_at = ""
     sub.updated_at = _now_iso()
-    _SUBSCRIPTIONS[organization_id] = sub.model_copy(deep=True)
+    _subs().save(sub)
     return sub.model_copy(deep=True)
 
 
@@ -213,7 +217,7 @@ def cancel_subscription(organization_id: str) -> Subscription:
     sub.status = SubscriptionStatus.cancelled
     sub.cancelled_at = _now_iso()
     sub.updated_at = _now_iso()
-    _SUBSCRIPTIONS[organization_id] = sub.model_copy(deep=True)
+    _subs().save(sub)
     return sub.model_copy(deep=True)
 
 
