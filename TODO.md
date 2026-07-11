@@ -12,11 +12,13 @@
 - [x] TD-010 FE layer boundary (`ai_insights_page`)
 - [x] Production Docker Compose verification (static gate; live requires Docker Desktop)
 - [x] End-to-end smoke test with real datasets (`scripts/e2e_smoke.py`)
-- [x] Cut `release/1.0` + `develop`; confirm `v1.0.0` tag (GA); hardening on `main` as `232574f`
+- [x] Cut `release/1.0` + `develop`; confirm `v1.0.0` tag (GA)
+- [x] Push `main`, `release/1.0`, `develop` to origin
+- [x] Tag `v1.0.1` pushed to origin
+- [x] Beta launch checklist written (`release/v1.0/BETA_LAUNCH_CHECKLIST.md`)
 
-## Next (beta launch ops)
+## Next (operator / host with Docker + gh auth)
 
-- [ ] Push `main`, `release/1.0`, `develop` to origin
-- [ ] Tag `v1.0.1` on hardening tip (recommended patch) or publish beta notes from `release/1.0`
-- [ ] Live Docker Compose `--profile prod` on a Docker host
-- [ ] Beta user invite / go-live checklist
+- [ ] Publish GitHub Release UI for `v1.0.1` (`gh auth login` required)
+- [ ] Live Docker Compose `--profile prod` + `--live` verify
+- [ ] Beta user invite / go-live sign-off

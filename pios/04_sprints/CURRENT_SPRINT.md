@@ -1,32 +1,25 @@
-# Current Sprint — COMPLETE: v1.0 Beta Gate (release/1.0)
+# Current Sprint — COMPLETE: Beta Launch Checklist
 
-**Status:** Complete  
+**Status:** Complete (engineering) · Operator live steps remaining  
 **Completed:** 2026-07-11  
-**Mission:** Feature freeze + beta branch cut
+**Mission:** Close beta prep docs; hand off live Compose + Release UI to operator
 
 ## Goal
 
-Land production-hardening on `main`, cut `release/1.0` for bugfix–only maintenance, and confirm the official `v1.0.0` tag remains the historical GA marker.
+Document the remaining operator-only beta launch steps after code/tag push.
 
-## Delivered (this session gate)
+## Delivered
 
-- Commit production-hardening batch (JWT/CORS fail-fast, durable storage metadata, TD-010, Compose verify, E2E smoke)
-- Branch `release/1.0` created from hardening tip
-- Branch `develop` created for future v1.1 work (per approved model)
-- `v1.0.0` tag **confirmed present** (points at original GA commit; not moved)
-- Recommendation: tag `v1.0.1` on hardening tip after push (patch release)
+- `release/v1.0/BETA_LAUNCH_CHECKLIST.md`
+- TODO updated: push + `v1.0.1` tag marked done
+- Confirmed blockers on this host: no Docker CLI, no `gh` auth
 
-## Validation
+## Remaining (operator machine)
 
-| Gate | Result |
-|------|--------|
-| E2E smoke | PASSED (prior) |
-| Compose static verify | PASSED (prior) |
-| arch_check | PASSED (prior) |
+1. `gh auth login` → publish GitHub Release for `v1.0.1`
+2. Install Docker Desktop → `compose --profile prod` + `verify_prod_compose.py --live`
+3. Invite beta users per checklist
 
-## Feature freeze
+## Next
 
-```text
-main / release/1.0  → bug fixes + security only
-develop             → v1.1 features
-```
+Operator executes live Compose + Release; engineering stands by for bugfixes on `release/1.0` only.
