@@ -1,6 +1,6 @@
 # PROJECT_STATUS
 
-> Auto-maintained by `python pios/tools/refresh_status.py`. Last refresh: 2026-07-11 15:25 UTC
+> Auto-maintained by `python pios/tools/refresh_status.py`. Last refresh: 2026-07-11 15:30 UTC
 
 ## Snapshot
 
@@ -8,7 +8,7 @@
 |-------|-------|
 | Product | Data Bot AI (AI Analytics SaaS MVP) |
 | Current version | `1.0.0` (from `backend/core/config.py`) |
-| Current sprint | Current Sprint — COMPLETE: E2E Smoke with Real Datasets |
+| Current sprint | Current Sprint — COMPLETE: v1.0 Beta Gate (release/1.0) |
 | Git tag | `v1.0.0` |
 | Test files (`test_*.py`) | **132** |
 | Route modules | **28** |
@@ -64,6 +64,6 @@ See [`../01_vision/ROADMAP.md`](../01_vision/ROADMAP.md)
 
 ## Next sprint recommendation
 
-**Confirm / retag `v1.0.0` and beta launch on operator-created `release/1.0`** (feature freeze: bug fixes only). Commit pending production-hardening work first if desired.
+**Beta ops:** push `main` / `release/1.0` / `develop`; optional annotated tag `v1.0.1` on hardening tip; live Compose prod profile; invite beta users. Feature freeze active on `release/1.0`.
 
 Run `python pios/tools/recommend_sprint.py` for ranked detail.
