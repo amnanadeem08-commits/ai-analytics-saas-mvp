@@ -487,16 +487,17 @@ def render_business_visual_analysis(client: BackendClient) -> None:
     _render_kpi_cards(dashboard.get("kpi_cards", []), dashboard.get("theme", {}), key_prefix="business_visual")
     render_plotly_chart_specs(dashboard)
 def _html_card(title: str, value: str | int | float, caption: str = "", color: str = "var(--brand-primary)") -> None:
-    st.markdown(
-        f"""
-        <div class="ai-card" style="border-top: 5px solid {color};">
-            <div class="ai-card-title">{html.escape(str(title))}</div>
-            <div class="ai-card-value">{html.escape(str(value))}</div>
-            <div class="ai-card-caption">{html.escape(str(caption))}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    """Streamlit-native metric card (no raw HTML)."""
+    label_map = {
+        "Entities": "Distinct categories",
+        "Insight Cards": "Insight count",
+        "Evidence Blocks": "Evidence items",
+        "Detected Pattern": "Detected domain",
+    }
+    label = label_map.get(str(title), str(title))
+    st.metric(label, value, help=caption or None)
+    if caption:
+        st.caption(caption)
 def _evidence_pills(items: list[str], empty_text: str = "No explicit evidence returned yet.") -> None:
     if not items:
         st.caption(empty_text)

@@ -73,8 +73,8 @@ from frontend.services.business_columns_service import (
 
 def render_dataset_upload_area(client: BackendClient) -> None:
     with st.container(border=True):
-        st.subheader("Upload CSV Dataset")
-        st.caption("Files are sent to the backend when available; if not, they are read locally for dashboard analysis.")
+        st.subheader("Upload CSV / Excel")
+        st.caption("Import once — the file becomes the Active Dataset for every analysis page.")
         if st.session_state.get("local_mode_notice"):
             st.info(LOCAL_MODE_INFO_MESSAGE)
         uploaded_file = st.file_uploader("Choose a CSV or Excel file", type=["csv", "xlsx", "xlsm"], key="dataset_upload_main")
@@ -88,39 +88,60 @@ def render_dataset_upload_area(client: BackendClient) -> None:
         if st.session_state.get("dataset_upload_signature") != upload_signature:
             if _register_local_uploaded_dataset(uploaded_file):
                 st.session_state["dataset_upload_signature"] = upload_signature
-                st.success("Dataset loaded locally. Preview and analysis are ready.")
+                st.success("Dataset loaded. It is now the Active Dataset for the whole app.")
                 st.rerun()
             return
 
-        st.success("Dataset is loaded locally for preview, cleaning, dashboards, insights, and reports.")
+        st.success("Active Dataset is ready for preview, cleaning, dashboards, insights, and reports.")
         if st.button("Reload selected file", use_container_width=True):
             st.session_state.pop("dataset_upload_signature", None)
             st.rerun()
+
+
+def render_upload_page(client: BackendClient) -> None:
+    """Dedicated Upload page — primary import surface (with Dataset Manager)."""
+    from frontend.components.active_dataset import get_active_dataset_id, render_active_dataset_banner
+    from frontend.components.ux_states import page_intro, success_banner
+    from frontend.utils.session_state import navigate_to
+
+    page_intro(
+        "Upload",
+        "Import a CSV or Excel file once. It becomes the Active Dataset for Dashboard, AI, and Reports.",
+        workflow_index=0,
+    )
+    render_active_dataset_banner()
+    render_dataset_upload_area(client)
+    if get_active_dataset_id():
+        success_banner("Dataset is active for the whole app. Continue to Prepare or Analyze.")
+        c1, c2, c3 = st.columns(3)
+        if c1.button("Clean data", use_container_width=True, key="upload_goto_clean"):
+            navigate_to("Data Cleaning")
+            st.rerun()
+        if c2.button("Open dashboard", use_container_width=True, type="primary", key="upload_goto_dash"):
+            navigate_to("Dashboard")
+            st.rerun()
+        if c3.button("AI Analyst", use_container_width=True, key="upload_goto_ai"):
+            navigate_to("AI Analyst")
+            st.rerun()
+
+
 def render_dataset_overview(client: BackendClient) -> None:
+    from frontend.components.active_dataset import require_active_dataset
     from frontend.components.ux_states import empty_state, error_panel, page_intro, section_header
 
     page_intro(
         "Dataset Preview",
-        "Inspect schema, quality metrics, and sample rows before you analyze.",
+        "Inspect schema, quality metrics, and sample rows for the Active Dataset.",
     )
     branding = st.session_state.get("branding", DEFAULT_BRANDING)
-    render_dataset_upload_area(client)
-    st.divider()
 
-    dataset_id = select_dataset(client, key="dataset_preview_select")
+    dataset_id = require_active_dataset(client)
     if not dataset_id:
-        local_dataset = st.session_state.get("local_uploaded_dataset")
-        if local_dataset:
-            _render_local_dataset_workbench(local_dataset["dataframe"], local_dataset["filename"], branding)
-        else:
-            empty_state(
-                "No dataset selected",
-                "Upload a file above or pick a saved dataset from the selector.",
-                primary_label="Open Dataset Manager",
-                primary_page="Dataset Manager",
-                key="ds_preview_empty",
-            )
         return
+
+    with st.expander("Replace / import another file", expanded=False):
+        st.caption("Updates the Active Dataset for the whole app.")
+        render_dataset_upload_area(client)
 
     if _is_local_dataset_id(dataset_id):
         active_df = _local_active_dataframe(dataset_id)
@@ -130,7 +151,7 @@ def render_dataset_overview(client: BackendClient) -> None:
         else:
             empty_state(
                 "Upload a dataset first",
-                "Use the upload area above, then return here to preview.",
+                "Use Upload or expand “Replace / import another file” above.",
                 primary_label="Upload data",
                 primary_page="Upload",
                 key="ds_preview_local_empty",
@@ -142,13 +163,14 @@ def render_dataset_overview(client: BackendClient) -> None:
         overview = client.get_overview(dataset_id)
         preview = client.get_preview(dataset_id, rows=rows)
         summary_cols = st.columns(4)
-        summary_cols[0].metric("Rows", f"{overview.get('row_count', 0):,}")
-        summary_cols[1].metric("Columns", f"{overview.get('column_count', 0):,}")
+        summary_cols[0].metric("Rows", f"{overview.get('row_count', 0):,}", help="Total records in the active dataset")
+        summary_cols[1].metric("Columns", f"{overview.get('column_count', 0):,}", help="Number of fields / attributes")
         summary_cols[2].metric(
             "Completeness",
             f"{overview.get('missing_summary', {}).get('completeness_pct', 0)}%",
+            help="Share of cells with usable values",
         )
-        summary_cols[3].metric("Duplicates", f"{overview.get('duplicate_rows', 0):,}")
+        summary_cols[3].metric("Duplicates", f"{overview.get('duplicate_rows', 0):,}", help="Fully duplicated rows")
         section_header("Column Schema", "Types and nullability for each column")
         st.dataframe(pd.DataFrame(overview.get("column_schema", [])), use_container_width=True)
         section_header("Preview", f"First {rows} rows")
@@ -164,19 +186,21 @@ def render_dataset_overview(client: BackendClient) -> None:
         local_dataset = st.session_state.get("local_uploaded_dataset")
         if local_dataset:
             _render_local_dataset_workbench(local_dataset["dataframe"], local_dataset["filename"], branding)
+
+
 def render_data_cleaning(client: BackendClient) -> None:
     from frontend.components.ux_states import empty_state, page_intro
 
     page_intro(
         "Data Quality Workspace",
-        "Recommendation-driven cleaning. Issues and recommendations are shown first; fixes apply only when you submit.",
+        "Recommendation-driven cleaning for the Active Dataset. Issues show first; fixes apply only when you submit.",
     )
 
-    dataset_id = select_dataset(client, key="data_cleaning_dataset_select")
+    dataset_id = select_dataset(client)
     if not dataset_id:
         empty_state(
-            "Select a dataset to clean",
-            "Upload or choose a dataset, then review recommendations before applying fixes.",
+            "No active dataset to clean",
+            "Upload or activate a dataset, then review recommendations before applying fixes.",
             primary_label="Upload data",
             primary_page="Upload",
             key="clean_empty",

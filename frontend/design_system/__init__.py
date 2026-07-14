@@ -22,7 +22,7 @@ from frontend.design_system.buttons import (
     secondary_button,
     success_button,
 )
-from frontend.design_system.cards import kpi_card, metric_cards, section_card
+from frontend.design_system.cards import kpi_card, metric_cards, rich_kpi_grid, section_card
 from frontend.design_system.charts import apply_chart_layout, chart_palette, ensure_session_palette, render_chart
 from frontend.design_system.colors import CHART_PALETTE, COLORS, STATUS_COLORS
 from frontend.design_system.forms import progress_indicator, search_box, tooltip_caption
@@ -54,6 +54,7 @@ __all__ = [
     "section_card",
     "kpi_card",
     "metric_cards",
+    "rich_kpi_grid",
     "alert",
     "notify_success",
     "notify_error",

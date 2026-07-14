@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from frontend.utils.session_state import track_recent_dataset
+from frontend.components.active_dataset import set_active_dataset
 from frontend.utils.workspace_api import get_workspace_clients, show_api_error
 
 
@@ -14,7 +14,7 @@ def render_dataset_manager(client=None) -> None:
 
     page_intro(
         "Dataset Manager",
-        "Upload and preview datasets through the API — similar to adding a data source in Power BI.",
+        "Upload and activate datasets through the API — like adding a data source in Power BI.",
         workflow_index=0,
     )
 
@@ -30,10 +30,8 @@ def render_dataset_manager(client=None) -> None:
                 result = dataset_api.upload(uploaded.name, uploaded.getvalue(), content_type)
                 dataset_id = result.get("dataset_id") or result.get("id")
                 if dataset_id:
-                    st.session_state["active_dataset_id"] = dataset_id
-                    st.session_state["selected_dataset_id"] = dataset_id
-                    track_recent_dataset(dataset_id, uploaded.name)
-                    st.success(f"Uploaded dataset `{dataset_id}`")
+                    set_active_dataset(dataset_id, uploaded.name)
+                    st.success(f"Uploaded and activated `{dataset_id}`")
                 else:
                     st.warning("Upload completed but no dataset_id was returned.")
                     st.json(result)
@@ -68,9 +66,7 @@ def render_dataset_manager(client=None) -> None:
         return
 
     if st.button("Set as active dataset", use_container_width=True):
-        st.session_state["active_dataset_id"] = dataset_id
-        st.session_state["selected_dataset_id"] = dataset_id
-        track_recent_dataset(dataset_id, (selected or {}).get("filename") or dataset_id)
+        set_active_dataset(dataset_id, (selected or {}).get("filename") or dataset_id)
         st.success(f"Active dataset set to `{dataset_id}`")
 
     tabs = st.tabs(["Overview", "Preview", "Status"])

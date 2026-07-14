@@ -18,7 +18,11 @@ from frontend.app_pages.ai_insights_page import (
 )
 from frontend.app_pages.dashboard_page import render_dashboard
 from frontend.app_pages.dashboard_studio_page import render_visual_builder
-from frontend.app_pages.dataset_page import render_data_cleaning, render_dataset_overview
+from frontend.app_pages.dataset_page import (
+    render_data_cleaning,
+    render_dataset_overview,
+    render_upload_page,
+)
 from frontend.app_pages.location_page import render_location_insights
 from frontend.app_pages.reports_page import render_reports
 from frontend.app_pages.sql_dax_page import render_dax_studio, render_sql_lab
@@ -221,7 +225,6 @@ _NAV_GROUPS: dict[str, list[tuple[str, str]]] = {
 
 # Internal alias: some nav labels map to existing renderers with different names
 _PAGE_ALIASES: dict[str, str] = {
-    "Upload": "Dataset Preview",         # render_dataset_overview handles upload
     "Business Analysis": "Business Visual Analysis",
     "AI Insights": "AI Insights",
     "Storyboard": "Storyboard Builder",
@@ -292,6 +295,7 @@ def _dispatch_page(page: str, client) -> None:
     canonical = _canonical_page(page)
     dispatch = {
         "Home":                     render_home,
+        "Upload":                   render_upload_page,
         "Dataset Preview":          render_dataset_overview,
         "Data Cleaning":            render_data_cleaning,
         "Dashboard":                render_dashboard,
@@ -416,6 +420,14 @@ def main() -> None:
 
     _apply_branding_theme()
 
+    # ── Sidebar: Active Dataset switcher (Power BI–style) ────────────────
+    from frontend.components.active_dataset import (
+        render_active_dataset_banner,
+        render_sidebar_dataset_switcher,
+    )
+
+    render_sidebar_dataset_switcher(client)
+
     # ── Sidebar: navigation ───────────────────────────────────────────────
     current_page = st.session_state.get("current_page", "Home")
     _render_sidebar_nav(current_page)
@@ -429,6 +441,7 @@ def main() -> None:
 
     if current_page != "Home":
         st.sidebar.caption(f"© {company}")
+        render_active_dataset_banner()
 
     try:
         _dispatch_page(current_page, client)
