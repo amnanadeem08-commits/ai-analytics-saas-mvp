@@ -1,6 +1,6 @@
 # PROJECT_STATUS
 
-> Auto-maintained by `python pios/tools/refresh_status.py`. Last refresh: 2026-07-11 15:30 UTC
+> Auto-maintained by `python pios/tools/refresh_status.py`. Last refresh: 2026-07-11 17:32 UTC
 
 ## Snapshot
 
@@ -8,9 +8,9 @@
 |-------|-------|
 | Product | Data Bot AI (AI Analytics SaaS MVP) |
 | Current version | `1.0.0` (from `backend/core/config.py`) |
-| Current sprint | Current Sprint — COMPLETE: v1.0 Beta Gate (release/1.0) |
+| Current sprint | Current Sprint — Sprint 8.9 Product Design System |
 | Git tag | `v1.0.0` |
-| Test files (`test_*.py`) | **132** |
+| Test files (`test_*.py`) | **133** |
 | Route modules | **28** |
 | Service modules (`*_service.py`) | **89** |
 | Known issues | **9** (see `KNOWN_ISSUES.md`) |
@@ -64,6 +64,6 @@ See [`../01_vision/ROADMAP.md`](../01_vision/ROADMAP.md)
 
 ## Next sprint recommendation
 
-**Beta ops:** push `main` / `release/1.0` / `develop`; optional annotated tag `v1.0.1` on hardening tip; live Compose prod profile; invite beta users. Feature freeze active on `release/1.0`.
+**Design system adoption** on remaining admin/ops/auth pages (`develop`). Sprint 8.9 Product Design System complete. Feature freeze remains on `release/1.0`.
 
 Run `python pios/tools/recommend_sprint.py` for ranked detail.

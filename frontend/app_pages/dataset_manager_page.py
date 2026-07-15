@@ -5,18 +5,24 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from frontend.utils.session_state import track_recent_dataset
+from frontend.components.active_dataset import set_active_dataset
 from frontend.utils.workspace_api import get_workspace_clients, show_api_error
 
 
 def render_dataset_manager(client=None) -> None:
-    st.header("Dataset Manager")
-    st.caption("Upload and preview datasets through the FastAPI upload/dataset endpoints.")
+    from frontend.components.ux_states import empty_state, page_intro, render_status_badge, section_header
+
+    page_intro(
+        "Dataset Manager",
+        "Upload and activate datasets through the API — like adding a data source in Power BI.",
+        workflow_index=0,
+    )
 
     clients = get_workspace_clients()
     dataset_api = clients["dataset"]
 
-    uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx", "xls"])
+    section_header("Upload", "CSV or Excel files are validated on the server.")
+    uploaded = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx", "xls"], help="Required for new datasets.")
     if uploaded is not None and st.button("Upload to API", type="primary"):
         with st.spinner("Uploading via `/upload`…"):
             try:
@@ -24,10 +30,8 @@ def render_dataset_manager(client=None) -> None:
                 result = dataset_api.upload(uploaded.name, uploaded.getvalue(), content_type)
                 dataset_id = result.get("dataset_id") or result.get("id")
                 if dataset_id:
-                    st.session_state["active_dataset_id"] = dataset_id
-                    st.session_state["selected_dataset_id"] = dataset_id
-                    track_recent_dataset(dataset_id, uploaded.name)
-                    st.success(f"Uploaded dataset `{dataset_id}`")
+                    set_active_dataset(dataset_id, uploaded.name)
+                    st.success(f"Uploaded and activated `{dataset_id}`")
                 else:
                     st.warning("Upload completed but no dataset_id was returned.")
                     st.json(result)
@@ -35,7 +39,7 @@ def render_dataset_manager(client=None) -> None:
                 show_api_error(exc)
 
     st.divider()
-    st.subheader("Available datasets")
+    section_header("Available datasets", "Select a dataset to preview status and rows.")
     try:
         datasets = dataset_api.list_datasets()
     except Exception as exc:
@@ -43,7 +47,11 @@ def render_dataset_manager(client=None) -> None:
         datasets = []
 
     if not datasets:
-        st.info("No datasets found. Upload a file to get started.")
+        empty_state(
+            "No datasets yet",
+            "Upload a CSV or Excel file above to create your first dataset.",
+            key="dm_empty",
+        )
         return
 
     labels = []
@@ -58,16 +66,19 @@ def render_dataset_manager(client=None) -> None:
         return
 
     if st.button("Set as active dataset", use_container_width=True):
-        st.session_state["active_dataset_id"] = dataset_id
-        st.session_state["selected_dataset_id"] = dataset_id
-        track_recent_dataset(dataset_id, (selected or {}).get("filename") or dataset_id)
+        set_active_dataset(dataset_id, (selected or {}).get("filename") or dataset_id)
         st.success(f"Active dataset set to `{dataset_id}`")
 
     tabs = st.tabs(["Overview", "Preview", "Status"])
     with tabs[0]:
         try:
             overview = dataset_api.overview(dataset_id)
-            st.json(overview)
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Rows", overview.get("row_count", "—"))
+            m2.metric("Columns", overview.get("column_count", "—"))
+            m3.metric("Duplicates", overview.get("duplicate_rows", "—"))
+            with st.expander("Raw overview", expanded=False):
+                st.json(overview)
         except Exception as exc:
             show_api_error(exc)
     with tabs[1]:
@@ -77,11 +88,17 @@ def render_dataset_manager(client=None) -> None:
             if rows:
                 st.dataframe(pd.DataFrame(rows), use_container_width=True)
             else:
-                st.json(preview)
+                empty_state("No preview rows", "This dataset returned an empty preview payload.")
+                with st.expander("Raw preview", expanded=False):
+                    st.json(preview)
         except Exception as exc:
             show_api_error(exc)
     with tabs[2]:
         try:
-            st.json(dataset_api.status(dataset_id))
+            status = dataset_api.status(dataset_id)
+            kind = str(status.get("status") or status.get("state") or "ready")
+            render_status_badge(kind.title(), kind)
+            with st.expander("Raw status", expanded=False):
+                st.json(status)
         except Exception as exc:
             show_api_error(exc)

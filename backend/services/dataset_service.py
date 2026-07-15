@@ -53,12 +53,57 @@ def reset_datasets() -> None:
 # ── Existing dataset read API (unchanged) ───────────────────────────────────
 
 
+def _normalize_dataset_metadata(item: dict[str, Any]) -> dict[str, Any]:
+    """Coerce mixed metadata-store shapes into DatasetMetadata fields.
+
+    Storage-lifecycle / test fixtures may omit paths and flatten counts under
+    ``overview``; response validation requires the full DatasetMetadata schema.
+    """
+    overview = item.get("overview") if isinstance(item.get("overview"), dict) else {}
+    original = item.get("original_filename") or item.get("filename") or "unknown"
+    stored = item.get("stored_filename") or original
+    processed = item.get("processed_filename") or stored
+    row_count = item.get("row_count")
+    if row_count is None:
+        row_count = overview.get("row_count", 0)
+    column_count = item.get("column_count")
+    if column_count is None:
+        column_count = overview.get("column_count", 0)
+    columns = item.get("columns")
+    if not isinstance(columns, list):
+        columns = []
+    status = item.get("status") or item.get("dataset_status") or DATASET_STATUS_READY
+    return {
+        "dataset_id": str(item.get("dataset_id") or ""),
+        "original_filename": str(original),
+        "stored_filename": str(stored),
+        "processed_filename": str(processed),
+        "upload_time": str(item.get("upload_time") or ""),
+        "row_count": int(row_count or 0),
+        "column_count": int(column_count or 0),
+        "columns": [str(c) for c in columns],
+        "original_path": str(item.get("original_path") or ""),
+        "processed_path": str(item.get("processed_path") or ""),
+        "status": str(status),
+        "file_hash": str(item.get("file_hash") or ""),
+        "error_message": item.get("error_message"),
+        "parquet_path": item.get("parquet_path"),
+        "storage_format": str(item.get("storage_format") or "csv"),
+    }
+
+
 def get_all_datasets() -> list[dict]:
-    return sorted(list_datasets(), key=lambda item: item.get("upload_time", ""), reverse=True)
+    datasets = []
+    for item in list_datasets():
+        status = str(item.get("status") or item.get("dataset_status") or "").lower()
+        if status == "deleted":
+            continue
+        datasets.append(_normalize_dataset_metadata(item))
+    return sorted(datasets, key=lambda item: item.get("upload_time", ""), reverse=True)
 
 
 def get_dataset_metadata(dataset_id: str) -> dict:
-    return get_dataset(dataset_id)
+    return _normalize_dataset_metadata(get_dataset(dataset_id))
 
 
 @lru_cache(maxsize=8)

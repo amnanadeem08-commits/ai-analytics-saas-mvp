@@ -28,7 +28,9 @@ Not allowed:
 4. [ ] **Kubernetes / multi-node** — optional container orchestration profiles
 5. [ ] **Enterprise SSO / IdP** — SAML/OIDC integrations
 6. [ ] **Advanced forecasting plugins** — expanded model adapters
-7. [ ] **UI polish** — incremental Streamlit UX improvements (no redesign required for 1.x)
+7. [x] **UI polish** — Sprint 8.8 Streamlit UX (nav regroup, shared states, core flows) — **complete 2026-07-11**; Design System → Sprint 8.9
+8. [x] **Product Design System (Sprint 8.9)** — tokens, type scale, reusable FE components — **complete 2026-07-11**
+9. [ ] **Design system adoption** — migrate remaining admin/ops/auth pages to DS chrome
 
 ## Near-term engineering (active)
 
@@ -43,6 +45,9 @@ Not allowed:
 - [x] Production Docker Compose verification — complete 2026-07-11 (static; live on Docker host)
 - [x] E2E smoke with real datasets — complete 2026-07-11
 - [x] Branch cut: `release/1.0` + `develop` — complete 2026-07-11
+- [x] Sprint 8.8 UX/UI polish (frontend-only) — complete 2026-07-11
+- [x] Sprint 8.9 Product Design System — complete 2026-07-11
+- [ ] Design system adoption (remaining pages)
 - [ ] Ops: push branches, optional `v1.0.1` tag, live Compose, beta invite
 
 ## Principles

@@ -122,20 +122,39 @@ def _render_statistical_glossary() -> None:
 
 
 def render_dashboard(client: BackendClient) -> None:
-    st.header("Executive Dashboard")
+    from frontend.components.ux_states import empty_state, error_panel, page_intro, section_header
+
+    page_intro(
+        "Executive Dashboard",
+        "KPIs, trends, and quality signals for the selected dataset.",
+    )
     _render_statistical_glossary()
     dataset_id = select_dataset(client)
     if not dataset_id:
+        empty_state(
+            "Select a dataset to open the dashboard",
+            "Upload data first, then return here for KPIs and charts.",
+            primary_label="Upload data",
+            primary_page="Upload",
+            key="dash_empty",
+        )
         return
 
     if _is_local_dataset_id(dataset_id):
         local_df = _local_active_dataframe(dataset_id)
         if local_df is None:
-            st.info("Upload a dataset first from Dataset Preview.")
+            empty_state(
+                "Upload a dataset first",
+                "Go to Upload or Dataset Preview, then open the dashboard again.",
+                primary_label="Upload data",
+                primary_page="Upload",
+                key="dash_local_empty",
+            )
             return
         st.info(LOCAL_MODE_INFO_MESSAGE)
         summary = _local_summary(local_df)
         palette = st.session_state.get("chart_palette", ["#0078D4", "#004E8C", "#F2C811", "#10B981", "#F97316"])
+        section_header("Local analysis", "Computed in-browser while the API is optional")
         _render_local_executive_dashboard(local_df, summary, palette)
         with st.expander("Dataset preview", expanded=False):
             st.dataframe(local_df.head(20), use_container_width=True)
@@ -153,6 +172,13 @@ def render_dashboard(client: BackendClient) -> None:
             else client.get_dashboard(dataset_id)
         )
     except requests.RequestException as exc:
+        error_panel(
+            "Dashboard could not load from the API",
+            suggestion="Check Connection in the sidebar, or use a local uploaded dataset.",
+            retry_key="dash_api",
+        )
+        with st.expander("Technical details", expanded=False):
+            st.code(str(exc))
         _warn_backend_unavailable("Stats Dashboard")
         return
 
@@ -276,172 +302,14 @@ def _render_kpi_cards(
     on_add_to_report=None,
     key_prefix: str = "kpi_cards",
 ) -> None:
-    if not cards:
-        return
-    theme = theme or {}
-    surface = theme.get("surface", "var(--ui-surface)")
-    border = theme.get("border", "var(--surface-border)")
-    muted = theme.get("muted_text", "var(--text-muted)")
-    text = theme.get("text", "var(--text-color)")
-    shadow = "0 10px 24px rgba(15, 23, 42, 0.06)" if theme.get("mode") != "dark" else "0 10px 24px rgba(0, 0, 0, 0.28)"
-    st.markdown(
-        f"""
-        <style>
-        :root {{
-            --kpi-surface: {surface};
-            --kpi-border: {border};
-            --kpi-muted: {muted};
-            --kpi-text: {text};
-            --kpi-shadow: {shadow};
-        }}
-        </style>
-        """,
-        unsafe_allow_html=True,
+    from frontend.design_system.cards import rich_kpi_grid
+
+    rich_kpi_grid(
+        cards,
+        key_prefix=key_prefix,
+        on_add_to_storyboard=on_add_to_storyboard,
+        on_add_to_report=on_add_to_report,
     )
-    st.markdown(
-        """
-        <style>
-        .kpi-card {
-            border: 1px solid var(--kpi-border);
-            border-radius: 10px;
-            padding: 14px 16px 16px;
-            min-height: 198px;
-            background: var(--kpi-surface);
-            box-shadow: var(--kpi-shadow);
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            overflow: visible;
-            height: auto;
-            overflow-wrap: anywhere;
-            word-break: normal;
-        }
-        .kpi-topline {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            min-width: 0;
-            gap: 8px;
-        }
-        .kpi-icon {
-            width: 22px;
-            height: 22px;
-        }
-        .kpi-label {
-            font-size: 0.78rem;
-            color: var(--kpi-muted);
-            text-transform: uppercase;
-            letter-spacing: 0;
-            font-weight: 700;
-        }
-        .kpi-value {
-            font-size: 1.55rem;
-            color: var(--kpi-text);
-            font-weight: 800;
-            margin-top: 6px;
-        }
-        .kpi-delta {
-            font-size: 0.86rem;
-            margin-top: 8px;
-            font-weight: 700;
-        }
-        .kpi-context {
-            font-size: 0.78rem;
-            color: var(--kpi-muted);
-            margin-top: 8px;
-            line-height: 1.25;
-        }
-        .sparkline {
-            display: flex;
-            align-items: flex-end;
-            gap: 3px;
-            height: 38px;
-            margin-top: 8px;
-        }
-        .spark-bar {
-            display: inline-block;
-            width: 8px;
-            border-radius: 3px 3px 0 0;
-            background: currentColor;
-            opacity: 0.72;
-        }
-        .kpi-decision {
-            font-size: 0.72rem;
-            color: var(--kpi-muted);
-            margin-top: 8px;
-            line-height: 1.25;
-        }
-        .kpi-meta {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            margin-top: 8px;
-            font-size: 0.7rem;
-            color: var(--kpi-muted);
-        }
-        .risk-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            display: inline-block;
-            margin-right: 5px;
-            background: currentColor;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-    for offset in range(0, min(len(cards), 8), 4):
-        cols = st.columns(4)
-        for card_index, (col, card) in enumerate(zip(cols, cards[offset : offset + 4]), start=offset):
-            value = card.get("formatted_value", card.get("value", ""))
-            if not card.get("formatted_value") and card.get("format") == "percent" and isinstance(value, (int, float)):
-                value = f"{value}%"
-            delta = card.get("delta_percentage")
-            trend_arrow = _safe_trend_text(str(card.get("trend_arrow", "->")))
-            delta_text = "" if delta is None else f"{trend_arrow} {delta}%".strip()
-            color = card.get("status_color") or muted
-            context = card.get("business_context") or card.get("description") or ""
-            sparkline = _sparkline_html(card.get("sparkline", []))
-            reason = card.get("reason", "")
-            action = card.get("recommended_action", "")
-            impact = card.get("expected_impact", "")
-            icon = _kpi_icon_svg(card.get("icon", "metric"))
-            risk = card.get("risk_indicator", "normal")
-            confidence = card.get("confidence_score", 0.75)
-            tooltip = _statistical_metric_help(card.get("label", "Metric"))
-            col.markdown(
-                f"""
-                <div class="kpi-card" title="{html.escape(tooltip)}">
-                    <div class="kpi-topline">
-                        <div class="kpi-label">{html.escape(str(card.get('label', 'Metric')))}</div>
-                        <div style="color: {color};">{icon}</div>
-                    </div>
-                    <div class="kpi-value">{html.escape(str(value))}</div>
-                    {f'<div class="kpi-delta" style="color: {color};">{html.escape(delta_text)}</div>' if delta_text else ''}
-                    <div style="color: {color};">{sparkline}</div>
-                    <div class="kpi-meta">
-                        <span style="color: {color};"><span class="risk-dot"></span>{risk.title()}</span>
-                        <span>Confidence {round(float(confidence) * 100)}%</span>
-                    </div>
-                    <div class="kpi-context">{html.escape(str(context))}</div>
-                    <div class="kpi-decision"><b>Reason:</b> {html.escape(str(reason))}</div>
-                    <div class="kpi-decision"><b>Action:</b> {html.escape(str(action))}</div>
-                    <div class="kpi-decision"><b>Impact:</b> {html.escape(str(impact))}</div>
-                    <div class="kpi-decision">{html.escape(str(card.get("statistical_explanation", "")))}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            kpi_id = card.get("kpi_id") or _kpi_id_from_label(card.get("label", "Metric"))
-            key_suffix = f"{key_prefix}_{kpi_id}_{card_index}"
-            action_cols = col.columns([1, 1])
-            if action_cols[0].button("Storyboard", key=f"{key_suffix}_storyboard", use_container_width=True):
-                if callable(on_add_to_storyboard):
-                    on_add_to_storyboard(card)
-            if action_cols[1].button("Report", key=f"{key_suffix}_report", use_container_width=True):
-                if callable(on_add_to_report):
-                    on_add_to_report(card)
 def _render_dashboard_header(dashboard: dict, summary: dict) -> None:
     branding = dashboard.get("branding", {})
     theme = dashboard.get("theme", {})

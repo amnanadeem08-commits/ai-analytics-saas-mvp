@@ -6,8 +6,7 @@ import streamlit as st
 
 from frontend.api.base import friendly_api_error
 from frontend.api.storage_client import StorageClient
-from frontend.utils.auth_state import get_access_token, is_authenticated, with_auto_refresh
-from frontend.utils.session_state import navigate_to
+from frontend.utils.auth_state import is_authenticated, with_auto_refresh
 from frontend.utils.workspace_api import get_api_client
 
 
@@ -20,19 +19,26 @@ def _error(exc: Exception) -> None:
 
 
 def render_storage_manager(client=None) -> None:
-    st.header("Storage Manager")
-    st.caption("Upload and manage artifacts through the FastAPI `/api/v1/storage` gateway.")
+    from frontend.components.ux_states import empty_state, page_intro, render_status_badge, section_header, success_banner
+
+    page_intro(
+        "Storage Manager",
+        "Upload and manage artifacts through the FastAPI `/api/v1/storage` gateway.",
+    )
 
     if not is_authenticated():
-        st.warning("Please sign in to manage storage.")
-        if st.button("Go to Login", key="storage_login"):
-            navigate_to("Login")
-            st.rerun()
+        empty_state(
+            "Sign in to manage storage",
+            "Artifact upload and retention controls require an authenticated session.",
+            primary_label="Go to Login",
+            primary_page="Login",
+            key="storage_login",
+        )
         return
 
     storage = _client()
 
-    st.subheader("Upload artifact")
+    section_header("Upload artifact", "Files are stored via the object storage gateway")
     with st.form("storage_upload_form"):
         uploaded = st.file_uploader("Choose a file", key="storage_upload_file")
         artifact_type = st.selectbox(
@@ -63,23 +69,29 @@ def render_storage_manager(client=None) -> None:
                 )
             )
             obj = result.get("object", {})
-            st.success(f"Uploaded `{obj.get('name')}` — object `{obj.get('object_id')}`")
+            success_banner(f"Uploaded `{obj.get('name')}` — object `{obj.get('object_id')}`")
         except Exception as exc:
             _error(exc)
 
     st.divider()
-    st.subheader("Stored objects")
+    section_header("Stored objects", "Archive, restore, or delete")
     try:
         listing = with_auto_refresh(lambda t: storage.list_files(t, mine=True))
         objects = listing.get("objects") or []
         if not objects:
-            st.info("No storage objects found.")
+            empty_state(
+                "No storage objects yet",
+                "Upload an artifact above to see it listed here.",
+                key="storage_empty",
+            )
             return
         for obj in objects:
             cols = st.columns([3, 2, 2, 1, 1, 1])
             cols[0].write(f"**{obj.get('name')}**")
             cols[1].caption(obj.get("artifact_type"))
-            cols[2].caption(f"v{obj.get('current_version')} · {obj.get('status')}")
+            with cols[2]:
+                render_status_badge(str(obj.get("status") or "active"), obj.get("status"))
+                st.caption(f"v{obj.get('current_version')}")
             oid = obj.get("object_id")
             if cols[3].button("Archive", key=f"arch_{oid}"):
                 try:

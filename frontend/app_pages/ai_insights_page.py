@@ -158,14 +158,34 @@ def render_ai_insights(client: BackendClient) -> None:
     )
     dataset_id = st.session_state.get("active_dataset_id") or st.session_state.get("selected_dataset_id")
     if not dataset_id:
-        st.info("Upload a dataset first from Dataset Preview.")
+        from frontend.components.ux_states import empty_state
+
+        empty_state(
+            "Upload a dataset first",
+            "Ask Your Data needs an active dataset from Upload or Dataset Preview.",
+            primary_label="Upload data",
+            primary_page="Upload",
+            key="ai_insights_empty",
+        )
         return
     if _is_local_dataset_id(dataset_id):
         local_df = _local_active_dataframe(dataset_id)
         if local_df is None:
-            st.info("Upload a dataset first from Dataset Preview.")
+            from frontend.components.ux_states import empty_state
+
+            empty_state(
+                "Upload a dataset first",
+                "Ask Your Data needs an active dataset from Upload or Dataset Preview.",
+                primary_label="Upload data",
+                primary_page="Upload",
+                key="ai_insights_local_empty",
+            )
             return
         st.info(LOCAL_MODE_INFO_MESSAGE)
+        from frontend.components.ux_states import section_header
+        from frontend.utils.session_state import navigate_to
+
+        section_header("Executive Summary", "Local dataset context for answers")
         data_insights_payload = build_data_insights(local_df)
         render_ai_business_insight_cards(build_ai_business_insights_from_data_insights(data_insights_payload))
         summary = _local_summary(local_df)
@@ -179,7 +199,7 @@ def render_ai_insights(client: BackendClient) -> None:
             _html_card("Missing Values", f"{summary['total_missing_values']:,}", "Quality issues that may lower confidence.", palette[2])
         with top_cards[3]:
             _html_card("Duplicates", f"{summary['duplicate_rows']:,}", "Repeated rows can inflate answers.", palette[3 % len(palette)])
-        st.subheader("Example Questions")
+        section_header("Key Insights", "Example questions grounded in your data")
         examples = ["What are the biggest data quality risks?", "Which segment appears most common?", "Which numeric measure should I monitor first?"]
         for question in examples:
             with st.container(border=True):
@@ -193,6 +213,17 @@ def render_ai_insights(client: BackendClient) -> None:
                     st.write("**Recommended next step:** Compare this measure by the largest category segment.")
                 else:
                     st.write("The uploaded dataset does not provide enough evidence to answer this confidently.")
+        section_header("Next Actions", "Continue into charts, dashboard, or AI Analyst")
+        na1, na2, na3 = st.columns(3)
+        if na1.button("Open Dashboard", key="ai_ins_dash"):
+            navigate_to("Dashboard")
+            st.rerun()
+        if na2.button("Open AI Analyst", key="ai_ins_analyst"):
+            navigate_to("AI Analyst")
+            st.rerun()
+        if na3.button("Open Reports", key="ai_ins_reports"):
+            navigate_to("Reports")
+            st.rerun()
         return
 
     try:
@@ -205,6 +236,9 @@ def render_ai_insights(client: BackendClient) -> None:
         _warn_backend_unavailable("Insights")
         return
 
+    from frontend.components.ux_states import section_header
+
+    section_header("Executive Summary", "Domain detection and evidence")
     render_ai_business_insight_cards(ai_business_payload)
 
     detection = domain_payload.get("detection", {})
@@ -453,16 +487,17 @@ def render_business_visual_analysis(client: BackendClient) -> None:
     _render_kpi_cards(dashboard.get("kpi_cards", []), dashboard.get("theme", {}), key_prefix="business_visual")
     render_plotly_chart_specs(dashboard)
 def _html_card(title: str, value: str | int | float, caption: str = "", color: str = "var(--brand-primary)") -> None:
-    st.markdown(
-        f"""
-        <div class="ai-card" style="border-top: 5px solid {color};">
-            <div class="ai-card-title">{html.escape(str(title))}</div>
-            <div class="ai-card-value">{html.escape(str(value))}</div>
-            <div class="ai-card-caption">{html.escape(str(caption))}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    """Streamlit-native metric card (no raw HTML)."""
+    label_map = {
+        "Entities": "Distinct categories",
+        "Insight Cards": "Insight count",
+        "Evidence Blocks": "Evidence items",
+        "Detected Pattern": "Detected domain",
+    }
+    label = label_map.get(str(title), str(title))
+    st.metric(label, value, help=caption or None)
+    if caption:
+        st.caption(caption)
 def _evidence_pills(items: list[str], empty_text: str = "No explicit evidence returned yet.") -> None:
     if not items:
         st.caption(empty_text)

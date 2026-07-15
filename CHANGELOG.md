@@ -6,6 +6,10 @@ All notable changes to Data Bot AI are documented in this file.
 
 ### Added
 
+- Sprint 8.9: `frontend/design_system/` — colors, typography, spacing, icons, theme, tokens, charts, tables, forms, buttons, cards, alerts, modals, layout, navigation
+- Sprint 8.9 docs: `docs/design_system/` (color, typography, component, layout, chart, accessibility guides + deliverables)
+- Sprint 8.8: shared Streamlit UX primitives (`frontend/components/ux_states.py`) — empty/loading/error/badge/stepper
+- Sprint 8.8 UX report: `docs/ux/SPRINT_8_8_UX_REPORT.md`
 - Production CORS fail-fast: refuse missing/wildcard `CORS_ALLOWED_ORIGINS` when `APP_ENV=production` (KI-006)
 - Durable storage object metadata catalog (file JSON index + SQLAlchemy `storage_objects`) — KI-009
 - Automatic file→SQL metadata migration when SQL catalog is empty
@@ -19,6 +23,9 @@ All notable changes to Data Bot AI are documented in this file.
 
 ### Changed
 
+- Sprint 8.9: Streamlit shell injects design-system CSS vars; `ux_states` / chart components / metric cards consume shared tokens
+- Sprint 8.8: Power BI–style sidebar nav (Get data → Analyze → AI insights → Automate → Storage → Share); API URL in Connection expander
+- Sprint 8.8: Home guided workflow + polish on dataset, dashboard, AI analyst, workflow/jobs, evaluation, knowledge, storage pages
 - E2E smoke gate expanded for real sample sales dataset (intelligence + live/ready + release checks); runner `scripts/e2e_smoke.py`
 - Docker Compose prod profile: backend healthcheck, JWT/CORS env passthrough, `.env.production.example`, `verify_prod_compose.py` gate
 - TD-010: AI Insights local mode imports `backend.analytics` instead of `backend.services` (arch gate green)

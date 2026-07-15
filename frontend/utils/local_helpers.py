@@ -87,7 +87,31 @@ def get_dataset_options(client: BackendClient) -> list[dict]:
         }
 
     return list(merged.values())
-def select_dataset(client: BackendClient, key: str | None = None) -> str | None:
+def select_dataset(
+    client: BackendClient,
+    key: str | None = None,
+    *,
+    show_picker: bool = False,
+) -> str | None:
+    """Resolve the Active Dataset for analysis pages.
+
+    By default (Power BI mode) this does **not** render a page-level selectbox —
+    use the sidebar Dataset Switcher instead. Pass ``show_picker=True`` only on
+    data-management pages that explicitly need an inline chooser.
+    """
+    from frontend.components.active_dataset import (
+        require_active_dataset,
+        resolve_active_dataset,
+        set_active_dataset,
+    )
+
+    if not show_picker:
+        # Prefer silent resolve; show CTA only when nothing is available
+        active = resolve_active_dataset(client)
+        if active:
+            return active
+        return require_active_dataset(client)
+
     datasets = get_dataset_options(client)
     if not datasets:
         local_map = st.session_state.get("local_dataframes", {})
@@ -95,8 +119,7 @@ def select_dataset(client: BackendClient, key: str | None = None) -> str | None:
             fallback_id = st.session_state.get("active_dataset_id") or st.session_state.get("selected_dataset_id")
             if fallback_id not in local_map:
                 fallback_id = next(iter(local_map.keys()))
-            st.session_state["active_dataset_id"] = fallback_id
-            st.session_state["selected_dataset_id"] = fallback_id
+            set_active_dataset(fallback_id)
             return fallback_id
         st.info("No datasets found. Upload a CSV first.")
         return None
@@ -115,10 +138,16 @@ def select_dataset(client: BackendClient, key: str | None = None) -> str | None:
 
     label_list = list(labels.keys())
     index = label_list.index(default_label) if default_label in label_list else 0
-    selected_label = st.selectbox("Select dataset", label_list, index=index, key=key or "select_dataset_default")
+    selected_label = st.selectbox(
+        "Select dataset",
+        label_list,
+        index=index,
+        key=key or "select_dataset_default",
+        help="Sets the Active Dataset for the whole app.",
+    )
     dataset_id = labels[selected_label]
-    st.session_state["active_dataset_id"] = dataset_id
-    st.session_state["selected_dataset_id"] = dataset_id
+    name = selected_label.split(" — ")[0] if " — " in selected_label else selected_label
+    set_active_dataset(dataset_id, name)
     return dataset_id
 def _render_local_kpis(df: pd.DataFrame, numeric_columns: list[str]) -> None:
     st.subheader("Dashboard Cards")
